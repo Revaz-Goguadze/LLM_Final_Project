@@ -1,0 +1,11 @@
+pydantic
+python-dotenv
+GitPython
+chromadb
+openai
+rank_bm25
+matplotlib
+seaborn
+pandas
+typer
+rich
