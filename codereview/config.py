@@ -16,7 +16,17 @@ MODEL_JUDGE = "google/gemini-2.0-flash-exp:free"
 # Storage
 CHROMA_DB_PATH = os.path.join(os.getcwd(), ".chroma")
 VECTOR_DB_COLLECTION = "codebase"
+BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "index.pkl")
+DOCS_DB_COLLECTION = "docs"
+DOCS_BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "docs_index.pkl")
 
 # Settings
 MAX_FIX_RETRIES = 3
 CONTEXT_WINDOW_REDUCTION_SUMMARY = True
+VERIFY_COMMAND = os.getenv("VERIFY_COMMAND", "pytest")
+
+# Retrieval
+SEMANTIC_TOP_K = 8
+BM25_TOP_K = 8
+HYBRID_ALPHA = 0.6
+EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "default")

@@ -26,10 +26,15 @@ class ReportGenerator:
         return md
 
     @staticmethod
-    def save_report(report: FinalReport, path: str):
-        with open(path, 'w') as f:
-            json.dump(report.model_dump(), f, indent=2)
-        
-        md_path = path.replace('.json', '.md')
-        with open(md_path, 'w') as f:
-            f.write(ReportGenerator.to_markdown(report))
+    def save_report(report, path: str):
+        if hasattr(report, "model_dump"):
+            payload = report.model_dump()
+        else:
+            payload = report
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+        if isinstance(report, FinalReport):
+            md_path = path.replace(".json", ".md")
+            with open(md_path, "w") as f:
+                f.write(ReportGenerator.to_markdown(report))

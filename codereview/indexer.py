@@ -1,25 +1,24 @@
 import os
 import chromadb
-from chromadb.utils import embedding_functions
 from .chunker import ASTChunker
-from .config import CHROMA_DB_PATH, VECTOR_DB_COLLECTION, OPENROUTER_API_KEY
+from .config import CHROMA_DB_PATH, VECTOR_DB_COLLECTION, BM25_INDEX_PATH
+from .bm25_index import BM25Index
+from .embeddings import get_embedding_function, collection_name, bm25_path
 from typing import List
 
 class CodebaseIndexer:
     def __init__(self):
         self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
         
-        # Using default embedding function (sentence-transformers) 
-        # or could use OpenAI/Gemini via OpenRouter
-        self.emb_fn = embedding_functions.DefaultEmbeddingFunction()
+        self.emb_fn = get_embedding_function()
         
         self.collection = self.client.get_or_create_collection(
-            name=VECTOR_DB_COLLECTION,
+            name=collection_name(VECTOR_DB_COLLECTION),
             embedding_function=self.emb_fn
         )
         self.chunker = ASTChunker()
 
-    def index_directory(self, directory: str):
+    def index_directory(self, directory: str, build_bm25: bool = True):
         """Indexes all supported files in a directory."""
         for root, dirs, files in os.walk(directory):
             # Skip hidden dirs and common exclusions
@@ -32,6 +31,10 @@ class CodebaseIndexer:
                 if file.endswith('.py'):
                     file_path = os.path.join(root, file)
                     self.index_file(file_path)
+        if build_bm25:
+            bm25 = BM25Index(path=bm25_path(BM25_INDEX_PATH))
+            bm25.build_from_collection(self.collection)
+            bm25.save()
 
     def index_file(self, file_path: str):
         """Chunks and indexes a single file."""

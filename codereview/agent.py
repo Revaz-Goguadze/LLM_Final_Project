@@ -1,7 +1,7 @@
 import json
 from typing import List, Dict, Any
 from openai import OpenAI
-from .config import OPENROUTER_API_KEY, MODEL_JUDGE
+from .config import OPENROUTER_API_KEY, MODEL_JUDGE, MAX_FIX_RETRIES
 from .retriever import HybridRetriever
 from .fixer import CodeFixer
 from .models import BugIssue
@@ -19,24 +19,19 @@ class ReActAgent:
         """Agentic loop to solve a specific bug."""
         print(f"\n[bold green]Agent starting to fix issue: {issue.description}[/bold green]")
         
-        # Simple 1-step logic for now:
-        # 1. Search for context
-        # 2. Refine fix
-        # 3. Apply
-        # 4. Verify
-        
-        # TODO: Full ReAct loop with multi-step reasoning
-        
-        success = self.fixer.apply_fix(issue)
-        if success:
+        for attempt in range(1, MAX_FIX_RETRIES + 1):
+            print(f"Attempt {attempt}/{MAX_FIX_RETRIES}")
+            success = self.fixer.apply_fix(issue)
+            if not success:
+                print("Could not apply fix.")
+                continue
             verified = self.fixer.run_verification()
-            if not verified:
-                self.fixer.rollback(issue.location.file)
-                print("Fix failed verification and was rolled back.")
-            else:
+            if verified:
                 print("Fix applied and verified successfully!")
-        else:
-            print("Could not apply fix.")
+                return
+            self.fixer.rollback(issue.location.file)
+            print("Fix failed verification and was rolled back.")
+        print("All fix attempts failed.")
 
 if __name__ == "__main__":
     print("ReActAgent module loaded.")

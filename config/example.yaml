@@ -1,0 +1,24 @@
+project:
+  name: "LLM Code Review"
+  max_context_tokens: 6000
+
+models:
+  - name: "gemini"
+    provider: "google"
+    enabled: true
+  - name: "openrouter-free"
+    provider: "openrouter"
+    enabled: true
+
+rag:
+  primary:
+    provider: "chromadb"
+    top_k: 12
+  secondary:
+    provider: "docs"
+    top_k: 6
+
+evaluation:
+  metrics: ["precision", "recall", "fix_rate"]
+  max_fix_attempts: 3
+
