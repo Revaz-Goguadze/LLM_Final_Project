@@ -3,20 +3,25 @@ from typing import List
 from openai import OpenAI
 from .models import GraderReport, BugIssue, BestPracticeViolation, FinalReport
 from .config import (
-    OPENROUTER_API_KEY, 
-    MODEL_GRADER_SECURITY, 
-    MODEL_GRADER_LOGIC, 
-    MODEL_GRADER_PERF, 
-    MODEL_JUDGE
+    OPENAI_API_KEY,
+    OPENROUTER_API_KEY,
+    MODEL_GRADER_SECURITY,
+    MODEL_GRADER_LOGIC,
+    MODEL_GRADER_PERF,
+    MODEL_JUDGE,
 )
 
 class MultiLLMGrader:
     def __init__(self):
-        # Using OpenRouter as it supports both Gemini and other models with OpenAI-compatible API
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
-        )
+        if OPENROUTER_API_KEY:
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=OPENROUTER_API_KEY,
+            )
+        else:
+            self.client = OpenAI(
+                api_key=OPENAI_API_KEY,
+            )
 
     def _get_grading_prompt(self, role: str, code: str) -> str:
         prompts = {

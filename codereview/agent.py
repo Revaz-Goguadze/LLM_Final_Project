@@ -1,17 +1,22 @@
 import json
 from typing import List, Dict, Any
 from openai import OpenAI
-from .config import OPENROUTER_API_KEY, MODEL_JUDGE, MAX_FIX_RETRIES
+from .config import OPENAI_API_KEY, OPENROUTER_API_KEY, MODEL_JUDGE, MAX_FIX_RETRIES
 from .retriever import HybridRetriever
 from .fixer import CodeFixer
 from .models import BugIssue
 
 class ReActAgent:
     def __init__(self):
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
-        )
+        if OPENROUTER_API_KEY:
+            self.client = OpenAI(
+                base_url="https://openrouter.ai/api/v1",
+                api_key=OPENROUTER_API_KEY,
+            )
+        else:
+            self.client = OpenAI(
+                api_key=OPENAI_API_KEY,
+            )
         self.retriever = HybridRetriever()
         self.fixer = CodeFixer()
 
