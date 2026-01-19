@@ -1,4 +1,5 @@
 import chromadb
+from openai import OpenAI
 from .bm25_index import BM25Index
 from .config import (
     CHROMA_DB_PATH,
@@ -7,8 +8,38 @@ from .config import (
     BM25_TOP_K,
     HYBRID_ALPHA,
     BM25_INDEX_PATH,
+    OPENROUTER_API_KEY,
 )
 from .embeddings import get_embedding_function, collection_name, bm25_path
+
+
+class HyDEGenerator:
+    def __init__(self):
+        self.client = OpenAI(
+            base_url="https://openrouter.ai/api/v1",
+            api_key=OPENROUTER_API_KEY,
+        )
+        self.model = "mistralai/devstral-2512:free"
+
+    def generate_hypothetical_doc(self, query: str) -> str:
+        prompt = f"""Given this code review query, generate a hypothetical code snippet that would be relevant.
+Query: {query}
+
+Generate a short Python code example (10-20 lines) that would answer this query.
+Only output the code, no explanations."""
+
+        try:
+            response = self.client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=300,
+            )
+            if response.choices and response.choices[0].message:
+                return response.choices[0].message.content or query
+            return query
+        except Exception:
+            return query
+
 
 class HybridRetriever:
     def __init__(
@@ -20,25 +51,25 @@ class HybridRetriever:
         self.emb_fn = get_embedding_function()
         self.collection = self.client.get_collection(
             name=collection_name(collection),
-            embedding_function=self.emb_fn
+            embedding_function=self.emb_fn,
         )
         self.bm25 = BM25Index(path=bm25_path(bm25_index_path))
         self.bm25.load_or_build(self.collection)
+        self.hyde = HyDEGenerator() if OPENROUTER_API_KEY else None
 
     def _semantic_search(self, query: str, n_results: int):
-        results = self.collection.query(
-            query_texts=[query],
-            n_results=n_results
-        )
+        results = self.collection.query(query_texts=[query], n_results=n_results)
 
         formatted = []
-        for i in range(len(results['ids'][0])):
-            formatted.append({
-                "id": results['ids'][0][i],
-                "content": results['documents'][0][i],
-                "metadata": results['metadatas'][0][i],
-                "distance": results['distances'][0][i]
-            })
+        for i in range(len(results["ids"][0])):
+            formatted.append(
+                {
+                    "id": results["ids"][0][i],
+                    "content": results["documents"][0][i],
+                    "metadata": results["metadatas"][0][i],
+                    "distance": results["distances"][0][i],
+                }
+            )
         return formatted
 
     @staticmethod
@@ -53,15 +84,19 @@ class HybridRetriever:
         return {k: (v - vmin) / (vmax - vmin) for k, v in scores.items()}
 
     def search(self, query: str, n_results: int = 5):
-        """Hybrid search using semantic similarity + BM25."""
         semantic = self._semantic_search(query, SEMANTIC_TOP_K)
         bm25 = self.bm25.search(query, BM25_TOP_K)
 
+        hyde_semantic = []
+        if self.hyde:
+            hyde_doc = self.hyde.generate_hypothetical_doc(query)
+            hyde_semantic = self._semantic_search(hyde_doc, SEMANTIC_TOP_K)
+
         semantic_scores = {}
-        for item in semantic:
+        for item in semantic + hyde_semantic:
             distance = item.get("distance", 0.0)
             sim = 1.0 / (1.0 + float(distance))
-            semantic_scores[item["id"]] = sim
+            semantic_scores[item["id"]] = max(sim, semantic_scores.get(item["id"], 0.0))
 
         bm25_scores = {item["id"]: float(item["score"]) for item in bm25}
 
@@ -69,12 +104,12 @@ class HybridRetriever:
         bm25_norm = self._normalize(bm25_scores)
 
         merged = {}
-        for item in semantic:
+        for item in semantic + hyde_semantic:
             merged[item["id"]] = {
                 "id": item["id"],
                 "content": item["content"],
                 "metadata": item["metadata"],
-                "distance": item["distance"],
+                "distance": item.get("distance"),
             }
         for item in bm25:
             if item["id"] not in merged:
@@ -95,6 +130,7 @@ class HybridRetriever:
 
         combined.sort(key=lambda x: x["score"], reverse=True)
         return combined[:n_results]
+
 
 if __name__ == "__main__":
     retriever = HybridRetriever()

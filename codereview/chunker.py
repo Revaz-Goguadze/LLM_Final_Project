@@ -77,7 +77,7 @@ class ASTChunker:
                 name=os.path.basename(file_path),
                 type='module'
             )]
-        except:
+        except Exception:
             return []
 
 if __name__ == "__main__":

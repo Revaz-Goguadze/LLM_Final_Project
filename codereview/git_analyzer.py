@@ -22,8 +22,8 @@ class GitAnalyzer:
         # Last commit vs previous (HEAD vs HEAD~1)
         try:
             last_commit_diff = self.repo.git.diff("HEAD~1", "HEAD")
-        except:
-            last_commit_diff = "" # Initial commit?
+        except Exception:
+            last_commit_diff = ""  # Initial commit?
             
         # Changed files (union of all)
         changed_files = list(set(

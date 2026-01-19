@@ -1,0 +1,36 @@
+{
+    "samples/security/sqli.py": {
+        "expected_bugs": 2,
+        "types": [
+            "security"
+        ],
+        "severities": [
+            "critical"
+        ]
+    },
+    "samples/logic/bugs.py": {
+        "expected_bugs": 2,
+        "types": [
+            "logic"
+        ],
+        "severities": [
+            "high",
+            "medium"
+        ]
+    },
+    "samples/performance/inefficiency.py": {
+        "expected_bugs": 2,
+        "types": [
+            "performance"
+        ],
+        "severities": [
+            "high",
+            "medium"
+        ]
+    },
+    "samples/clean/perfect.py": {
+        "expected_bugs": 0,
+        "types": [],
+        "severities": []
+    }
+}

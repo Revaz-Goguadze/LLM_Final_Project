@@ -1,0 +1,13 @@
+{
+  "single_llm": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "multi_llm": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0
+  },
+  "improvement_percent": 0.0
+}

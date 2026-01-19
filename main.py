@@ -1,3 +1,4 @@
+import os
 import typer
 from rich import print
 from codereview.git_analyzer import GitAnalyzer
@@ -6,6 +7,8 @@ from codereview.retriever import HybridRetriever
 from codereview.docs_indexer import DocsIndexer
 from codereview.grader import MultiLLMGrader
 from codereview.report_generator import ReportGenerator
+from codereview.rag_builder import build_rag_query, build_context_block, build_analysis_input
+from codereview.evaluator import EvaluationRunner
 from codereview.config import (
     MODEL_GRADER_SECURITY,
     MODEL_GRADER_LOGIC,
@@ -13,45 +16,27 @@ from codereview.config import (
     DOCS_DB_COLLECTION,
     DOCS_BM25_INDEX_PATH,
 )
-from codereview.rag_builder import (
-    build_rag_query,
-    build_context_block,
-    build_analysis_input,
-    truncate_text,
-)
-from codereview.evaluator import EvaluationRunner
 
 app = typer.Typer()
 
 @app.command()
-def index(path: str = ".", bm25: bool = True):
-    """Index the codebase."""
+def index(path: str = "."):
+    """Index the codebase (Code RAG)."""
     print(f"[bold blue]Indexing codebase at {path}...[/bold blue]")
     indexer = CodebaseIndexer()
-    indexer.index_directory(path, build_bm25=bm25)
-    print("[bold green]Indexing complete![/bold green]")
+    indexer.index_directory(path)
+    print("[bold green]Codebase indexing complete![/bold green]")
 
 @app.command()
-def index_docs(path: str = "docs", bm25: bool = True):
-    """Index documentation for secondary RAG."""
-    print(f"[bold blue]Indexing docs at {path}...[/bold blue]")
+def index_docs(path: str = "docs"):
+    """Index best practices documentation (Documentation RAG)."""
+    print(f"[bold blue]Indexing documentation at {path}...[/bold blue]")
     indexer = DocsIndexer()
-    indexer.index_directory(path, build_bm25=bm25)
-    print("[bold green]Docs indexing complete![/bold green]")
+    indexer.index_directory(path)
+    print("[bold green]Documentation indexing complete![/bold green]")
 
 @app.command()
-def analyze(
-    staged: bool = False,
-    unstaged: bool = False,
-    last_commit: bool = False,
-    query: str | None = None,
-    use_rag: bool = True,
-    top_k: int = 6,
-    docs_top_k: int = 4,
-    use_docs_rag: bool = True,
-    show_context: bool = False,
-    context_out: str | None = None,
-):
+def analyze(staged: bool = False, unstaged: bool = False, last_commit: bool = False, query: str = None):
     """Analyze changes for bugs and bad practices."""
     print("[bold blue]Starting analysis...[/bold blue]")
     
@@ -60,71 +45,83 @@ def analyze(
     diffs = analyzer.get_diffs()
     
     target_diff = ""
-    if staged: target_diff = diffs.staged
-    elif unstaged: target_diff = diffs.unstaged
-    elif last_commit: target_diff = diffs.last_commit
+    diff_type = "changes"
+    if staged: 
+        target_diff = diffs.staged
+        diff_type = "staged changes"
+    elif unstaged: 
+        target_diff = diffs.unstaged
+        diff_type = "unstaged changes"
+    elif last_commit: 
+        target_diff = diffs.last_commit
+        diff_type = "last commit"
     else:
         # Default to unstaged or staged
         target_diff = diffs.unstaged or diffs.staged
+        diff_type = "current changes"
         
     if not target_diff:
         print("[yellow]No diff found to analyze.[/yellow]")
         return
 
-    rag_context = None
-    if use_rag:
-        retriever = HybridRetriever()
-        rag_query = build_rag_query(query, target_diff)
-        if rag_query:
-            rag_results = retriever.search(rag_query, n_results=top_k)
-            code_context = build_context_block(rag_results)
+    print(f"[blue]Analyzing {diff_type}...[/blue]")
 
-            docs_context = ""
-            if use_docs_rag:
-                docs_retriever = HybridRetriever(
-                    collection=DOCS_DB_COLLECTION,
-                    bm25_index_path=DOCS_BM25_INDEX_PATH,
-                )
-                docs_results = docs_retriever.search(rag_query, n_results=docs_top_k)
-                docs_context = build_context_block(docs_results) if docs_results else ""
+    rag_query = build_rag_query(query, target_diff)
+    if not rag_query:
+        rag_query = target_diff[:2000]
 
-            parts = []
-            if code_context:
-                parts.append("Codebase context:\n" + code_context)
-            if docs_context:
-                parts.append("Python docs/best practices:\n" + docs_context)
-            rag_context = "\n\n".join(parts) if parts else None
-            if show_context:
-                print("[bold]RAG query:[/bold]")
-                print(truncate_text(rag_query))
-                if rag_context:
-                    print("[bold]RAG context (truncated):[/bold]")
-                    print(truncate_text(rag_context))
-            if context_out and rag_context:
-                with open(context_out, "w", encoding="utf-8") as f:
-                    f.write(rag_context)
-
-    # 3. Multi-LLM Grading
+    # 2. RAG #1: Code Context - Find relevant code from indexed codebase
+    print("[blue]RAG #1: Retrieving related code from indexed codebase...[/blue]")
+    try:
+        code_retriever = HybridRetriever()
+        related_chunks = code_retriever.search(rag_query, n_results=5)
+        code_context = build_context_block(related_chunks)
+        print(f"[green]Found {len(related_chunks)} related code chunks.[/green]")
+    except Exception as e:
+        print(f"[yellow]Warning: Code RAG failed: {e}[/yellow]")
+        code_context = ""
+    
+    # 3. RAG #2: Documentation Context - Find relevant best practices
+    print("[blue]RAG #2: Retrieving best practices from documentation...[/blue]")
+    try:
+        docs_retriever = HybridRetriever(
+            collection=DOCS_DB_COLLECTION,
+            bm25_index_path=DOCS_BM25_INDEX_PATH,
+        )
+        related_docs = docs_retriever.search(rag_query, n_results=5)
+        docs_context = build_context_block(related_docs) if related_docs else ""
+        print(f"[green]Found {len(related_docs)} relevant best practices.[/green]")
+    except Exception as e:
+        print(f"[yellow]Warning: Docs RAG failed: {e}[/yellow]")
+        docs_context = ""
+    
+    # 4. Combine all contexts for comprehensive analysis
+    combined_context = "\n\n".join(
+        part for part in [code_context, docs_context] if part
+    )
+    full_context = build_analysis_input(query, target_diff, combined_context or None)
+    
+    # 4. Multi-LLM Grading with full context
     grader = MultiLLMGrader()
-    analysis_input = build_analysis_input(query, target_diff, rag_context)
     print("Calling Grader 1 (Security)...")
-    r1 = grader.grade_with_model("security", MODEL_GRADER_SECURITY, analysis_input)
+    r1 = grader.grade_with_model("security", MODEL_GRADER_SECURITY, full_context)
     
     print("Calling Grader 2 (Logic)...")
-    r2 = grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
+    r2 = grader.grade_with_model("logic", MODEL_GRADER_LOGIC, full_context)
     
     print("Calling Grader 3 (Performance)...")
-    r3 = grader.grade_with_model("performance", MODEL_GRADER_PERF, analysis_input)
+    r3 = grader.grade_with_model("performance", MODEL_GRADER_PERF, full_context)
     
-    # 4. Final Judgment
+    # 5. Final Judgment
     print("Calling Final Judge...")
     final_report = grader.judge([r1, r2, r3])
+    final_report = ReportGenerator.filter_report(final_report, target_diff)
     
-    # 5. Generate Report
+    # 6. Generate Report
     ReportGenerator.save_report(final_report, "bug_report.json")
     print("[bold green]Analysis complete! Report saved to bug_report.md[/bold green]")
     
-    # 6. Print Summary
+    # 7. Print Summary
     print("\n[bold]Consolidated Issues:[/bold]")
     for issue in final_report.consolidated_issues:
         severity_color = {"critical": "red", "high": "orange1", "medium": "yellow", "low": "green"}.get(issue.severity.lower(), "white")
@@ -153,24 +150,18 @@ def fix(issue_id: int):
         print("[red]No bug report found. Run 'analyze' first.[/red]")
 
 @app.command()
-def evaluate(
-    dataset: str,
-    use_rag: bool = True,
-    top_k: int = 6,
-    docs_top_k: int = 4,
-    use_docs_rag: bool = True,
-    output: str = "eval_report.json",
-):
-    """Evaluate model quality on a labeled dataset."""
-    runner = EvaluationRunner(
-        use_rag=use_rag,
-        top_k=top_k,
-        docs_top_k=docs_top_k,
-        use_docs_rag=use_docs_rag,
-    )
-    results = runner.run(dataset)
-    ReportGenerator.save_report(results, output)
-    print(f"[bold green]Evaluation complete! Report saved to {output}[/bold green]")
+def evaluate(dataset_path: str, use_rag: bool = True, use_docs_rag: bool = True):
+    """Run evaluation on a labeled dataset."""
+    runner = EvaluationRunner(use_rag=use_rag, use_docs_rag=use_docs_rag)
+    results = runner.run(dataset_path)
+    with open("evaluation/results_summary.json", "w") as f:
+        import json
+
+        json.dump(results, f, indent=2)
+    print("[bold green]Evaluation complete! Results saved to evaluation/results_summary.json[/bold green]")
+    print(f"Precision: {results['precision']:.2f}")
+    print(f"Recall: {results['recall']:.2f}")
+    print(f"Fix rate: {results['fix_rate']:.2f}")
 
 if __name__ == "__main__":
     app()
