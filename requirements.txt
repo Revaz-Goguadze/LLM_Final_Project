@@ -9,3 +9,6 @@ seaborn
 pandas
 typer
 rich
+pytest
+tree-sitter
+tree-sitter-languages

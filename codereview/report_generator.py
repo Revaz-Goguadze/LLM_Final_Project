@@ -1,7 +1,77 @@
 import json
+import os
+import re
+from typing import Dict, Set
+
 from .models import FinalReport
+from .diff_utils import parse_changed_lines
 
 class ReportGenerator:
+    @staticmethod
+    def _parse_changed_lines(diff_text: str) -> Dict[str, Set[int]]:
+        return parse_changed_lines(diff_text)
+
+    @staticmethod
+    def filter_report(report: FinalReport, diff_text: str) -> FinalReport:
+        if not report.consolidated_issues:
+            return report
+
+        changed_lines = ReportGenerator._parse_changed_lines(diff_text)
+        diff_files = set(changed_lines.keys())
+        file_cache: Dict[str, str] = {}
+
+        filtered = []
+        for issue in report.consolidated_issues:
+            severity = (issue.severity or "").lower()
+            if severity not in {"critical", "high"}:
+                continue
+            if issue.confidence is not None and issue.confidence < 0.8:
+                continue
+
+            file_path = issue.location.file if issue.location else None
+            if not file_path or not os.path.exists(file_path):
+                continue
+
+            if diff_files and file_path not in diff_files:
+                continue
+
+            if issue.location and issue.location.line and file_path in changed_lines:
+                if issue.location.line not in changed_lines[file_path]:
+                    continue
+
+            if file_path not in file_cache:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        file_cache[file_path] = f.read()
+                except Exception:
+                    file_cache[file_path] = ""
+
+            evidence = (issue.evidence or "").strip()
+            if evidence:
+                evidence_variants = {evidence, evidence.lstrip("+-").strip()}
+                file_content = file_cache.get(file_path, "")
+                if not any(ev and ev in file_content for ev in evidence_variants):
+                    if not any(ev and ev in diff_text for ev in evidence_variants):
+                        continue
+
+            filtered.append(issue)
+
+        if len(filtered) == len(report.consolidated_issues):
+            return report
+
+        summary = report.summary
+        if not filtered:
+            summary = "No high-confidence issues remained after validation."
+        else:
+            summary = f"Filtered report after validation. {len(filtered)} issues retained."
+
+        return FinalReport(
+            winner_assessment=report.winner_assessment,
+            consolidated_issues=filtered,
+            overall_health_score=report.overall_health_score,
+            summary=summary,
+        )
+
     @staticmethod
     def to_markdown(report: FinalReport) -> str:
         md = f"# Code Review Report\n\n"
@@ -26,10 +96,15 @@ class ReportGenerator:
         return md
 
     @staticmethod
-    def save_report(report: FinalReport, path: str):
-        with open(path, 'w') as f:
-            json.dump(report.model_dump(), f, indent=2)
-        
-        md_path = path.replace('.json', '.md')
-        with open(md_path, 'w') as f:
-            f.write(ReportGenerator.to_markdown(report))
+    def save_report(report, path: str):
+        if hasattr(report, "model_dump"):
+            payload = report.model_dump()
+        else:
+            payload = report
+        with open(path, "w") as f:
+            json.dump(payload, f, indent=2)
+
+        if isinstance(report, FinalReport):
+            md_path = path.replace(".json", ".md")
+            with open(md_path, "w") as f:
+                f.write(ReportGenerator.to_markdown(report))

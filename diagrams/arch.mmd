@@ -1,0 +1,54 @@
+flowchart TB
+    subgraph Input["📥 Input Layer"]
+        Git["Git Diff Extractor"]
+        Files["File Watcher"]
+        User["User Query"]
+    end
+    
+    subgraph Indexer["🗂️ Data Ingestion"]
+        AST["AST Parser"]
+        Chunker["Smart Chunker"]
+        Meta["Meta-RAG Summarizer"]
+    end
+    
+    subgraph Storage["💾 Storage Layer"]
+        VectorDB["ChromaDB / FAISS"]
+        DocStore["Best Practices Docs"]
+        History["Fix History Cache"]
+    end
+    
+    subgraph Retrieval["🔍 Retrieval Layer"]
+        BM25["BM25 Keyword"]
+        Semantic["Semantic Search"]
+        HyDE["HyDE Generator"]
+        Hybrid["Hybrid Ranker"]
+    end
+    
+    subgraph Analysis["🔬 Analysis Layer"]
+        Grader["Code Grader LLM"]
+        BugDetector["Bug Pattern Detector"]
+        Practices["Bad Practice Flagging"]
+        Multi["Multi-LLM Voting"]
+    end
+    
+    subgraph Agent["🤖 Agentic Loop"]
+        ReAct["ReAct Agent"]
+        Fixer["Fix Proposal Generator"]
+        Verify["Verification Runner"]
+        Apply["Code Applier"]
+    end
+    
+    subgraph Output["📤 Output Layer"]
+        Report["Bug Report"]
+        Diff["Proposed Diff"]
+        Metrics["Quality Metrics"]
+    end
+    
+    Input --> Indexer
+    Indexer --> Storage
+    Storage --> Retrieval
+    User --> Retrieval
+    Retrieval --> Analysis
+    Analysis --> Agent
+    Agent --> Output
+    Agent -.->|Loop| Retrieval

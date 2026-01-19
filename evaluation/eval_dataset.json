@@ -1,0 +1,177 @@
+[
+  {
+    "id": "security_sqli",
+    "diff": "diff --git a/sqli.py b/sqli.py\n+import sqlite3\n+def get_user(username):\n+    query = f\"SELECT * FROM users WHERE username = '{username}'\"\n+    cursor.execute(query)\n+def delete_user(user_id):\n+    query = f\"DELETE FROM users WHERE id = {user_id}\"\n+    cursor.execute(query)",
+    "expected_issues": [
+      {"type": "security", "file": "sqli.py", "line": 7, "keyword": "sql injection"},
+      {"type": "security", "file": "sqli.py", "line": 15, "keyword": "sql injection"}
+    ]
+  },
+  {
+    "id": "security_xss",
+    "diff": "diff --git a/xss.py b/xss.py\n+@app.route('/search')\n+def search():\n+    query = request.args.get('q', '')\n+    return f\"<h1>Search results for: {query}</h1>\"",
+    "expected_issues": [
+      {"type": "security", "file": "xss.py", "line": 8, "keyword": "xss"}
+    ]
+  },
+  {
+    "id": "security_hardcoded",
+    "diff": "diff --git a/hardcoded_secrets.py b/hardcoded_secrets.py\n+API_KEY = \"sk-1234567890abcdef\"\n+DATABASE_PASSWORD = \"admin123\"",
+    "expected_issues": [
+      {"type": "security", "file": "hardcoded_secrets.py", "line": 4, "keyword": "hardcoded"},
+      {"type": "security", "file": "hardcoded_secrets.py", "line": 5, "keyword": "password"}
+    ]
+  },
+  {
+    "id": "security_path_traversal",
+    "diff": "diff --git a/path_traversal.py b/path_traversal.py\n+def read_file(filename):\n+    filepath = f\"/var/data/{filename}\"\n+    with open(filepath, 'r') as f:",
+    "expected_issues": [
+      {"type": "security", "file": "path_traversal.py", "line": 5, "keyword": "path traversal"}
+    ]
+  },
+  {
+    "id": "security_insecure_hash",
+    "diff": "diff --git a/insecure_hash.py b/insecure_hash.py\n+def hash_password(password):\n+    return hashlib.md5(password.encode()).hexdigest()",
+    "expected_issues": [
+      {"type": "security", "file": "insecure_hash.py", "line": 4, "keyword": "md5"}
+    ]
+  },
+  {
+    "id": "logic_bugs",
+    "diff": "diff --git a/bugs.py b/bugs.py\n+def find_item(items, target):\n+    for i in range(len(items) - 1):\n+        if items[i] == target:\n+def calculate_average(numbers):\n+    return sum(numbers) / len(numbers)",
+    "expected_issues": [
+      {"type": "logic", "file": "bugs.py", "line": 4, "keyword": "off-by-one"},
+      {"type": "logic", "file": "bugs.py", "line": 11, "keyword": "division by zero"}
+    ]
+  },
+  {
+    "id": "logic_null_check",
+    "diff": "diff --git a/null_check.py b/null_check.py\n+def get_user_email(user):\n+    return user.email.lower()\n+def get_first_item(items):\n+    return items[0]",
+    "expected_issues": [
+      {"type": "logic", "file": "null_check.py", "line": 2, "keyword": "null"},
+      {"type": "logic", "file": "null_check.py", "line": 11, "keyword": "empty"}
+    ]
+  },
+  {
+    "id": "logic_boundary",
+    "diff": "diff --git a/boundary.py b/boundary.py\n+def get_page_items(items, page, page_size=10):\n+    start = page * page_size\n+def binary_search(arr, target):\n+    left = mid",
+    "expected_issues": [
+      {"type": "logic", "file": "boundary.py", "line": 3, "keyword": "off-by-one"},
+      {"type": "logic", "file": "boundary.py", "line": 14, "keyword": "infinite loop"}
+    ]
+  },
+  {
+    "id": "logic_race_condition",
+    "diff": "diff --git a/race_condition.py b/race_condition.py\n+def withdraw(amount):\n+    global balance\n+    if balance >= amount:\n+        balance -= amount",
+    "expected_issues": [
+      {"type": "logic", "file": "race_condition.py", "line": 5, "keyword": "race condition"}
+    ]
+  },
+  {
+    "id": "logic_type_coercion",
+    "diff": "diff --git a/type_coercion.py b/type_coercion.py\n+def compare_ids(id1, id2):\n+    return id1 == id2\n+def calculate_total(price, quantity):\n+    return price * quantity",
+    "expected_issues": [
+      {"type": "logic", "file": "type_coercion.py", "line": 2, "keyword": "type"},
+      {"type": "logic", "file": "type_coercion.py", "line": 6, "keyword": "string"}
+    ]
+  },
+  {
+    "id": "perf_inefficiency",
+    "diff": "diff --git a/inefficiency.py b/inefficiency.py\n+def process_orders(orders):\n+    for order in orders:\n+        details = db_fetch_details(order.id)\n+def slow_check(items):\n+    for i in range(len(items)):\n+        for j in range(len(items)):",
+    "expected_issues": [
+      {"type": "performance", "file": "inefficiency.py", "line": 5, "keyword": "n+1"},
+      {"type": "performance", "file": "inefficiency.py", "line": 13, "keyword": "o(n"}
+    ]
+  },
+  {
+    "id": "perf_memory_leak",
+    "diff": "diff --git a/memory_leak.py b/memory_leak.py\n+cache = {}\n+def process_request(request_id, data):\n+    cache[request_id] = data",
+    "expected_issues": [
+      {"type": "performance", "file": "memory_leak.py", "line": 4, "keyword": "memory leak"}
+    ]
+  },
+  {
+    "id": "perf_blocking_io",
+    "diff": "diff --git a/blocking_io.py b/blocking_io.py\n+def fetch_all_urls(urls):\n+    for url in urls:\n+        response = requests.get(url)",
+    "expected_issues": [
+      {"type": "performance", "file": "blocking_io.py", "line": 7, "keyword": "blocking"}
+    ]
+  },
+  {
+    "id": "perf_string_concat",
+    "diff": "diff --git a/string_concat.py b/string_concat.py\n+def build_report(items):\n+    result = \"\"\n+    for item in items:\n+        result += f\"Item: {item}\\n\"",
+    "expected_issues": [
+      {"type": "performance", "file": "string_concat.py", "line": 5, "keyword": "concatenation"}
+    ]
+  },
+  {
+    "id": "perf_repeated_computation",
+    "diff": "diff --git a/repeated_computation.py b/repeated_computation.py\n+def find_matches(items, patterns):\n+    for item in items:\n+        for pattern in patterns:\n+            import re\n+            if re.match(pattern, item):",
+    "expected_issues": [
+      {"type": "performance", "file": "repeated_computation.py", "line": 6, "keyword": "regex"}
+    ]
+  },
+  {
+    "id": "style_naming",
+    "diff": "diff --git a/naming.py b/naming.py\n+def calc(x, y, z):\n+    return (x + y) * z\n+def ProcessData(Data):\n+    return Data.strip()\n+class userManager:",
+    "expected_issues": [
+      {"type": "style", "file": "naming.py", "line": 1, "keyword": "naming"},
+      {"type": "style", "file": "naming.py", "line": 5, "keyword": "pascalcase"},
+      {"type": "style", "file": "naming.py", "line": 10, "keyword": "naming"}
+    ]
+  },
+  {
+    "id": "style_complexity",
+    "diff": "diff --git a/complexity.py b/complexity.py\n+def process(data, flag1, flag2, flag3, mode, option):\n+    if flag1:\n+        if flag2:\n+            if flag3:",
+    "expected_issues": [
+      {"type": "style", "file": "complexity.py", "line": 1, "keyword": "complexity"}
+    ]
+  },
+  {
+    "id": "style_magic_numbers",
+    "diff": "diff --git a/magic_numbers.py b/magic_numbers.py\n+def calculate_price(base):\n+    return base * 1.0825 + 5.99",
+    "expected_issues": [
+      {"type": "style", "file": "magic_numbers.py", "line": 3, "keyword": "magic number"}
+    ]
+  },
+  {
+    "id": "style_dead_code",
+    "diff": "diff --git a/dead_code.py b/dead_code.py\n+import sys\n+import json\n+def process(data):\n+    return result\n+    print(\"Done\")",
+    "expected_issues": [
+      {"type": "style", "file": "dead_code.py", "line": 2, "keyword": "unused"},
+      {"type": "style", "file": "dead_code.py", "line": 10, "keyword": "unreachable"}
+    ]
+  },
+  {
+    "id": "style_documentation",
+    "diff": "diff --git a/documentation.py b/documentation.py\n+def x(a, b, c):\n+    return (a + b) * c if c else 0",
+    "expected_issues": [
+      {"type": "style", "file": "documentation.py", "line": 1, "keyword": "docstring"}
+    ]
+  },
+  {
+    "id": "clean_perfect",
+    "diff": "diff --git a/perfect.py b/perfect.py\n+def get_full_name(first_name: str, last_name: str) -> str:\n+    if not first_name or not last_name:\n+        return \"\"\n+    return f\"{first_name} {last_name}\".strip()",
+    "expected_issues": []
+  },
+  {
+    "id": "clean_validator",
+    "diff": "diff --git a/validator.py b/validator.py\n+EMAIL_PATTERN = re.compile(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\\.[a-zA-Z]{2,}$')\n+def validate_email(email: str) -> bool:\n+    if not email or not isinstance(email, str):\n+        return False\n+    return bool(EMAIL_PATTERN.match(email.strip()))",
+    "expected_issues": []
+  },
+  {
+    "id": "clean_calculator",
+    "diff": "diff --git a/calculator.py b/calculator.py\n+def safe_divide(numerator: float, denominator: float) -> Optional[float]:\n+    if denominator == 0:\n+        return None\n+    return numerator / denominator",
+    "expected_issues": []
+  },
+  {
+    "id": "clean_data_processor",
+    "diff": "diff --git a/data_processor.py b/data_processor.py\n+@dataclass\n+class ProcessedRecord:\n+    id: str\n+    value: float\n+    is_valid: bool",
+    "expected_issues": []
+  },
+  {
+    "id": "clean_string_utils",
+    "diff": "diff --git a/string_utils.py b/string_utils.py\n+def truncate(text: str, max_length: int, suffix: str = \"...\") -> str:\n+    if not text or max_length <= 0:\n+        return \"\"\n+    if len(text) <= max_length:\n+        return text\n+    return text[:max_length - len(suffix)] + suffix",
+    "expected_issues": []
+  }
+]

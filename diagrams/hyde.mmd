@@ -1,0 +1,14 @@
+sequenceDiagram
+    participant User
+    participant HyDE as HyDE Generator
+    participant Embed as Embedder
+    participant DB as Vector DB
+    participant Retriever
+    
+    User->>HyDE: Login fails silently
+    HyDE->>HyDE: Generate hypothetical bug report
+    Note right of HyDE: The login function fails...
+    HyDE->>Embed: Embed hypothetical text
+    Embed->>DB: Query with hypothetical embedding
+    DB->>Retriever: Return top-k real code chunks
+    Retriever->>User: Relevant code blocks

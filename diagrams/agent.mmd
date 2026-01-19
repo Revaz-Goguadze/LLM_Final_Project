@@ -1,0 +1,20 @@
+stateDiagram-v2
+    [*] --> Analyze: User triggers review
+    Analyze --> Report: Generate bug report
+    Report --> UserDecision: Present issues
+    
+    UserDecision --> SelectFix: User selects issue to fix
+    UserDecision --> [*]: User exits
+    
+    SelectFix --> GenerateFix: Agent proposes fix
+    GenerateFix --> ApplyFix: Apply to codebase
+    ApplyFix --> Verify: Run tests/lints
+    
+    Verify --> Success: Tests pass
+    Verify --> Retry: Tests fail
+    
+    Retry --> GenerateFix: Refine fix max 3 attempts
+    Retry --> Manual: Max retries exceeded
+    
+    Success --> Report: Update report
+    Manual --> UserDecision: Needs manual intervention

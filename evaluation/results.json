@@ -1,0 +1,44 @@
+{
+  "metrics": {
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1_score": 1.0,
+    "total_tp": 6,
+    "total_fp": 0,
+    "total_fn": 0
+  },
+  "details": [
+    {
+      "file": "samples/security/sqli.py",
+      "expected": 2,
+      "found": 2,
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "file": "samples/logic/bugs.py",
+      "expected": 2,
+      "found": 2,
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "file": "samples/performance/inefficiency.py",
+      "expected": 2,
+      "found": 2,
+      "tp": 2,
+      "fp": 0,
+      "fn": 0
+    },
+    {
+      "file": "samples/clean/perfect.py",
+      "expected": 0,
+      "found": 0,
+      "tp": 0,
+      "fp": 0,
+      "fn": 0
+    }
+  ]
+}

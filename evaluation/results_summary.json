@@ -1,0 +1,227 @@
+{
+  "precision": 0.24,
+  "recall": 0.2,
+  "fix_rate": 0.2,
+  "totals": {
+    "tp": 6,
+    "fp": 19,
+    "fn": 24,
+    "fix_rate_sum": 5.0,
+    "cases": 25
+  },
+  "per_case": [
+    {
+      "id": "security_sqli",
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "security_xss",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "security_hardcoded",
+      "tp": 2,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 1.0
+    },
+    {
+      "id": "security_path_traversal",
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 1.0
+    },
+    {
+      "id": "security_insecure_hash",
+      "tp": 1,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 1.0
+    },
+    {
+      "id": "logic_bugs",
+      "tp": 1,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 1.0
+    },
+    {
+      "id": "logic_null_check",
+      "tp": 1,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 1.0
+    },
+    {
+      "id": "logic_boundary",
+      "tp": 0,
+      "fp": 2,
+      "fn": 2,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "logic_race_condition",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "logic_type_coercion",
+      "tp": 0,
+      "fp": 0,
+      "fn": 2,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "perf_inefficiency",
+      "tp": 0,
+      "fp": 2,
+      "fn": 2,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "perf_memory_leak",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "perf_blocking_io",
+      "tp": 0,
+      "fp": 3,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "perf_string_concat",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "perf_repeated_computation",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "style_naming",
+      "tp": 0,
+      "fp": 1,
+      "fn": 3,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "style_complexity",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "style_magic_numbers",
+      "tp": 0,
+      "fp": 0,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "style_dead_code",
+      "tp": 0,
+      "fp": 1,
+      "fn": 2,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "style_documentation",
+      "tp": 0,
+      "fp": 1,
+      "fn": 1,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "clean_perfect",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "clean_validator",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "clean_calculator",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "clean_data_processor",
+      "tp": 0,
+      "fp": 0,
+      "fn": 0,
+      "fix_rate": 0.0
+    },
+    {
+      "id": "clean_string_utils",
+      "tp": 0,
+      "fp": 1,
+      "fn": 0,
+      "fix_rate": 0.0
+    }
+  ],
+  "per_model": {
+    "security": {
+      "precision": 0.32,
+      "recall": 0.26666666666666666,
+      "fix_rate": 0.4,
+      "totals": {
+        "tp": 8,
+        "fp": 17,
+        "fn": 22,
+        "fix_rate_sum": 10.0,
+        "cases": 25
+      }
+    },
+    "logic": {
+      "precision": 0.25925925925925924,
+      "recall": 0.23333333333333334,
+      "fix_rate": 0.24,
+      "totals": {
+        "tp": 7,
+        "fp": 20,
+        "fn": 23,
+        "fix_rate_sum": 6.0,
+        "cases": 25
+      }
+    },
+    "performance": {
+      "precision": 0.25,
+      "recall": 0.23333333333333334,
+      "fix_rate": 0.36,
+      "totals": {
+        "tp": 7,
+        "fp": 21,
+        "fn": 23,
+        "fix_rate_sum": 9.0,
+        "cases": 25
+      }
+    }
+  }
+}
