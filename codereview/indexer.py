@@ -28,7 +28,7 @@ class CodebaseIndexer:
                 continue
                 
             for file in files:
-                if file.endswith('.py'):
+                if file.endswith((".py", ".js", ".jsx", ".ts", ".tsx")):
                     file_path = os.path.join(root, file)
                     self.index_file(file_path)
         if build_bm25:

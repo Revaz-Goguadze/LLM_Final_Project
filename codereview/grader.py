@@ -1,6 +1,6 @@
 import json
 import re
-from typing import List
+from typing import Any, List
 from openai import OpenAI
 from .models import GraderReport, FinalReport
 from .config import OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE
@@ -61,15 +61,75 @@ Code to analyze:
 
 {code}"""
 
-    def _extract_json(self, content: str) -> dict:
-        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", content)
-        if json_match:
-            content = json_match.group(1).strip()
-        else:
-            json_start = content.find("{")
-            if json_start != -1:
-                content = content[json_start:]
-        return json.loads(content.strip())
+    def _json_candidates(self, content: str) -> List[str]:
+        if not content:
+            return []
+        candidates: List[str] = [content]
+        for match in re.finditer(r"```(?:json)?\s*([\s\S]*?)```", content):
+            candidates.append(match.group(1).strip())
+        json_start = content.find("{")
+        json_end = content.rfind("}")
+        if json_start != -1 and json_end != -1 and json_end > json_start:
+            candidates.append(content[json_start : json_end + 1])
+        deduped = []
+        seen = set()
+        for candidate in candidates:
+            cleaned = candidate.strip()
+            if cleaned and cleaned not in seen:
+                deduped.append(cleaned)
+                seen.add(cleaned)
+        return deduped
+
+    def _safe_json_loads(self, content: str) -> Any:
+        last_error = None
+        for candidate in self._json_candidates(content):
+            try:
+                return json.loads(candidate)
+            except Exception as e:
+                last_error = e
+            try:
+                cleaned = re.sub(r",\s*([}\]])", r"\1", candidate)
+                return json.loads(cleaned)
+            except Exception as e:
+                last_error = e
+        raise ValueError(f"Failed to parse JSON output: {last_error}")
+
+    def _coerce_grader_payload(self, payload: Any) -> dict:
+        if isinstance(payload, list) and payload:
+            payload = payload[0]
+        if not isinstance(payload, dict):
+            payload = {}
+        issues = payload.get("issues")
+        if not isinstance(issues, list):
+            issues = []
+        violations = payload.get("best_practices_violations")
+        if not isinstance(violations, list):
+            violations = []
+        overall = payload.get("overall_score")
+        summary = payload.get("summary") or "No summary provided."
+        return {
+            "issues": issues,
+            "best_practices_violations": violations,
+            "overall_score": overall if isinstance(overall, (int, float)) else 0,
+            "summary": summary,
+        }
+
+    def _coerce_final_payload(self, payload: Any) -> dict:
+        if isinstance(payload, list) and payload:
+            payload = payload[0]
+        if not isinstance(payload, dict):
+            payload = {}
+        consolidated = payload.get("consolidated_issues")
+        if not isinstance(consolidated, list):
+            consolidated = []
+        score = payload.get("overall_health_score")
+        summary = payload.get("summary") or "No summary provided."
+        return {
+            "winner_assessment": payload.get("winner_assessment"),
+            "consolidated_issues": consolidated,
+            "overall_health_score": score if isinstance(score, (int, float)) else 0,
+            "summary": summary,
+        }
 
     def grade_with_model(self, role: str, model_id: str, code: str) -> GraderReport:
         prompt = self._get_grading_prompt(role, code)
@@ -94,7 +154,8 @@ Code to analyze:
             if not content:
                 raise ValueError("Empty response from model")
 
-            data = self._extract_json(content)
+            data = self._safe_json_loads(content)
+            data = self._coerce_grader_payload(data)
             data["grader_id"] = (
                 f"{role}_{model_id.split('/')[-1].split(':')[0] if '/' in model_id else model_id}"
             )
@@ -141,7 +202,8 @@ Code to analyze:
             if not content:
                 raise ValueError("Empty response from model")
 
-            data = self._extract_json(content)
+            data = self._safe_json_loads(content)
+            data = self._coerce_final_payload(data)
             return FinalReport(**data)
         except Exception as e:
             print(f"Error during final judgment: {e}")

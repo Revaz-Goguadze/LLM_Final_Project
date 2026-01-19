@@ -14,8 +14,9 @@ codereview/
 ├── git_analyzer.py    # GitAnalyzer: extracts staged/unstaged/commit diffs
 ├── indexer.py         # CodebaseIndexer: chunks + stores in ChromaDB
 ├── chunker.py         # ASTChunker: Python AST-based code splitting
-├── retriever.py       # HybridRetriever: semantic search (BM25 TODO)
-├── docs_rag.py        # DocsIndexer/Retriever: best practices RAG
+├── retriever.py       # HybridRetriever: semantic + BM25 + HyDE
+├── docs_indexer.py    # DocsIndexer: best practices RAG
+├── rag_builder.py     # RAG prompt/context assembly helpers
 └── report_generator.py# Saves FinalReport to JSON/MD
 ```
 
@@ -35,7 +36,7 @@ MultiLLMGrader.grade_with_model() x3 -> [GraderReport]
 MultiLLMGrader.judge() -> FinalReport
     |
     v
-ReActAgent.solve_issue() -> CodeFixer.apply_fix()
+ReActAgent.solve_issue() -> CodeFixer.apply_fix_with_content()
 ```
 
 ## WHERE TO LOOK
@@ -50,16 +51,14 @@ ReActAgent.solve_issue() -> CodeFixer.apply_fix()
 
 ## CONVENTIONS
 
-- All LLM responses parsed as JSON with regex extraction
+- LLM responses parsed as JSON with multi-candidate fallback and coercion
 - Grader prompts request strict JSON schema compliance
-- ChromaDB collections: `codebase` (code), `best_practices_docs` (docs)
+- ChromaDB collections: `codebase` (code), `docs` (docs)
 - Metadata always includes: file_path, name, type, start_line, end_line
 
 ## INCOMPLETE IMPLEMENTATIONS
 
 | Component | Status | TODO |
 |-----------|--------|------|
-| ReActAgent | Stub | Multi-step reasoning loop |
-| CodeFixer.apply_fix | Placeholder | Actual patch application |
-| HybridRetriever | Semantic only | Add BM25 ranking |
+| ReActAgent | Partial | Multi-step reasoning loop + tool routing |
 | ASTChunker | Python only | Tree-sitter for JS/TS |

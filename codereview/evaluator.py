@@ -134,6 +134,7 @@ class EvaluationRunner:
             "logic": {"tp": 0, "fp": 0, "fn": 0, "fix_rate_sum": 0.0, "cases": 0},
             "performance": {"tp": 0, "fp": 0, "fn": 0, "fix_rate_sum": 0.0, "cases": 0},
         }
+        per_category = {}
 
         for case in cases:
             rag_context = self._build_context(case.query, case.diff)
@@ -171,22 +172,51 @@ class EvaluationRunner:
                 }
             )
 
+            for expected in case.expected_issues:
+                category = expected.get("type") or "unknown"
+                if category not in per_category:
+                    per_category[category] = {
+                        "tp": 0,
+                        "fp": 0,
+                        "fn": 0,
+                        "fix_rate_sum": 0.0,
+                        "cases": 0,
+                    }
+                ctp, cfp, cfn, cfix = _score_case(predicted, [expected])
+                per_category[category]["tp"] += ctp
+                per_category[category]["fp"] += cfp
+                per_category[category]["fn"] += cfn
+                per_category[category]["fix_rate_sum"] += cfix
+                per_category[category]["cases"] += 1
+
         precision = totals["tp"] / (totals["tp"] + totals["fp"]) if (totals["tp"] + totals["fp"]) else 0.0
         recall = totals["tp"] / (totals["tp"] + totals["fn"]) if (totals["tp"] + totals["fn"]) else 0.0
         fix_rate = totals["fix_rate_sum"] / totals["cases"] if totals["cases"] else 0.0
+        f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
         per_model_scores = {}
         for key, stats in per_model.items():
             p = stats["tp"] / (stats["tp"] + stats["fp"]) if (stats["tp"] + stats["fp"]) else 0.0
             r = stats["tp"] / (stats["tp"] + stats["fn"]) if (stats["tp"] + stats["fn"]) else 0.0
             f = stats["fix_rate_sum"] / stats["cases"] if stats["cases"] else 0.0
-            per_model_scores[key] = {"precision": p, "recall": r, "fix_rate": f, "totals": stats}
+            f1_score = (2 * p * r / (p + r)) if (p + r) else 0.0
+            per_model_scores[key] = {"precision": p, "recall": r, "f1": f1_score, "fix_rate": f, "totals": stats}
+
+        per_category_scores = {}
+        for key, stats in per_category.items():
+            p = stats["tp"] / (stats["tp"] + stats["fp"]) if (stats["tp"] + stats["fp"]) else 0.0
+            r = stats["tp"] / (stats["tp"] + stats["fn"]) if (stats["tp"] + stats["fn"]) else 0.0
+            f = stats["fix_rate_sum"] / stats["cases"] if stats["cases"] else 0.0
+            f1_score = (2 * p * r / (p + r)) if (p + r) else 0.0
+            per_category_scores[key] = {"precision": p, "recall": r, "f1": f1_score, "fix_rate": f, "totals": stats}
 
         return {
             "precision": precision,
             "recall": recall,
+            "f1": f1,
             "fix_rate": fix_rate,
             "totals": totals,
             "per_case": per_case,
             "per_model": per_model_scores,
+            "per_category": per_category_scores,
         }

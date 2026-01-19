@@ -1,4 +1,4 @@
-# CodeReview AI - Cursor-like Bug Report Tool
+# CodeReview AI - Cursor-like Bug Report Tool (Updated 2026-01-19)
 
 A professional-grade bug reporting and auto-fix system using RAG, multi-LLM evaluation, and agentic loops.
 
@@ -11,7 +11,7 @@ A professional-grade bug reporting and auto-fix system using RAG, multi-LLM eval
 
 ---
 
-## 1. System Architecture
+## 1. System Architecture (Current Implementation)
 
 ```mermaid
 flowchart TB
@@ -22,15 +22,13 @@ flowchart TB
     end
     
     subgraph Indexer["🗂️ Data Ingestion"]
-        AST["AST Parser"]
-        Chunker["Smart Chunker"]
-        Meta["Meta-RAG Summarizer"]
+        AST["AST Parser (Python)"]
+        Chunker["AST Chunker"]
     end
     
     subgraph Storage["💾 Storage Layer"]
-        VectorDB["ChromaDB / FAISS"]
-        DocStore["Best Practices Docs"]
-        History["Fix History Cache"]
+        VectorDB["ChromaDB (local)"]
+        DocStore["Best Practices Docs (indexed)"]
     end
     
     subgraph Retrieval["🔍 Retrieval Layer"]
@@ -42,9 +40,7 @@ flowchart TB
     
     subgraph Analysis["🔬 Analysis Layer"]
         Grader["Code Grader LLM"]
-        BugDetector["Bug Pattern Detector"]
-        Practices["Bad Practice Flagging"]
-        Multi["Multi-LLM Voting"]
+        Multi["Multi-LLM Grading + Judge"]
     end
     
     subgraph Agent["🤖 Agentic Loop"]
@@ -74,14 +70,13 @@ flowchart TB
 
 ## 2. Component Specifications
 
-### 2.1 Data Ingestion Layer
+### 2.1 Data Ingestion Layer (Current)
 
 | Component | Technology | Purpose |
 |-----------|------------|---------|
-| **Git Integration** | `gitpython` | Extract diffs from last commit, staged changes, unstaged changes |
-| **AST Parser** | `tree-sitter` (multi-lang) | Parse code into AST for intelligent chunking |
-| **Smart Chunker** | Custom Python | Split by function/class boundaries (not line count) |
-| **Meta-RAG Summarizer** | GPT-4/Gemini | Generate 1-sentence summaries per function to reduce context |
+| **Git Integration** | subprocess git | Extract diffs from last commit, staged changes, unstaged changes |
+| **AST Parser** | Python `ast` | Parse Python code into AST for intelligent chunking |
+| **AST Chunker** | Custom Python | Split by function/class boundaries |
 
 #### Git Diff Extraction Logic
 ```python
@@ -98,12 +93,12 @@ class GitAnalyzer:
 
 ---
 
-### 2.2 Storage Layer
+### 2.2 Storage Layer (Current)
 
 | Component | Technology | Specification |
 |-----------|------------|---------------|
 | **Vector DB** | ChromaDB (local) | Persistent collection with metadata filtering |
-| **Embeddings** | `text-embedding-3-small` or `nomic-embed-text` | 1536/768 dimensions |
+| **Embeddings** | `sentence-transformers` (DefaultEmbeddingFunction) | Local embedding model |
 | **Document Store** | Markdown files | Best practices, style guides, known patterns |
 
 #### Schema Design
@@ -128,7 +123,7 @@ class GitAnalyzer:
 
 ---
 
-### 2.3 Retrieval Layer (Hybrid RAG)
+### 2.3 Retrieval Layer (Hybrid RAG, Implemented)
 
 | Strategy | Use Case | Implementation |
 |----------|----------|----------------|
@@ -157,17 +152,17 @@ sequenceDiagram
 
 ---
 
-### 2.4 Analysis & Grading Layer
+### 2.4 Analysis & Grading Layer (Current)
 
 #### Multi-LLM Grading System (Mirrors Original Assignment)
 We use **3 LLM "graders"** that evaluate code independently, then a **judge** picks the best assessment:
 
-| Role | Model (via OpenRouter Free) | Task |
-|------|-----------------------------|------|
-| **Grader 1** | `google/gemini-2.0-flash-exp:free` | Analyze for security issues |
-| **Grader 2** | `meta-llama/llama-3.1-8b-instruct:free` | Analyze for logic bugs |
-| **Grader 3** | `mistralai/mistral-7b-instruct:free` | Analyze for performance issues |
-| **Judge** | `google/gemini-2.0-flash-exp:free` | Combine assessments, rank severity |
+| Role | Model (via OpenRouter) | Task |
+|------|------------------------|------|
+| **Grader 1** | `MODEL_GRADER_SECURITY` | Analyze for security issues |
+| **Grader 2** | `MODEL_GRADER_LOGIC` | Analyze for logic bugs |
+| **Grader 3** | `MODEL_GRADER_PERF` | Analyze for performance issues |
+| **Judge** | `MODEL_JUDGE` | Combine assessments, rank severity |
 
 #### Grading Output Schema
 ```json
@@ -236,9 +231,9 @@ stateDiagram-v2
 
 ---
 
-## 3. Implementation Phases
+## 3. Implementation Phases (Status)
 
-### Phase 1: Core Infrastructure (Days 1-3)
+### Phase 1: Core Infrastructure (Complete)
 
 #### 3.1.1 Project Setup
 ```
@@ -286,7 +281,7 @@ FinalProject/
 
 ---
 
-### Phase 2: RAG Pipeline (Days 4-7)
+### Phase 2: RAG Pipeline (Complete)
 
 ##### [NEW] [indexer.py](file:///home/coder/uni/applied_LLM/FinalProject/codereview/indexer.py)
 - `CodebaseIndexer` class:
@@ -303,7 +298,7 @@ FinalProject/
 
 ---
 
-### Phase 3: Analysis & Grading (Days 8-12)
+### Phase 3: Analysis & Grading (Complete)
 
 ##### [NEW] [grader.py](file:///home/coder/uni/applied_LLM/FinalProject/codereview/grader.py)
 - `MultiLLMGrader` class:
@@ -319,7 +314,7 @@ FinalProject/
 
 ---
 
-### Phase 4: Agentic Fix Loop (Days 13-17)
+### Phase 4: Agentic Fix Loop (Partial)
 
 ##### [NEW] [agent.py](file:///home/coder/uni/applied_LLM/FinalProject/codereview/agent.py)
 - `ReActAgent` class:
@@ -336,7 +331,7 @@ FinalProject/
 
 ---
 
-### Phase 5: Evaluation (Days 18-21)
+### Phase 5: Evaluation (Partial)
 
 ##### [NEW] [evaluation/](file:///home/coder/uni/applied_LLM/FinalProject/evaluation/)
 - Create evaluation dataset:
@@ -390,27 +385,26 @@ plots = [
 
 ---
 
-## 5. Tech Stack
+## 5. Tech Stack (Actual)
 
 | Layer | Technology | Rationale |
 |-------|------------|-----------|
-| **Backend** | Python 3.11+ | Mature LLM ecosystem |
+| **Backend** | Python 3.13+ | Mature LLM ecosystem |
 | **Vector DB** | ChromaDB | Simple local setup, persistent |
-| **Embeddings** | OpenAI `text-embedding-3-small` | Balance of quality/cost |
-| **LLMs** | OpenAI GPT-4, Anthropic Claude, Google Gemini | Multi-model voting |
+| **Embeddings** | sentence-transformers | Local embedding model |
+| **LLMs** | OpenRouter models (configurable) | Multi-model grading |
 | **CLI** | `typer` or `click` | User-friendly interface |
 | **Testing** | `pytest` | Standard Python testing |
 | **Visualization** | `matplotlib` + `seaborn` | Required plots |
 
 ---
 
-## 6. API Keys Required
+## 6. API Keys Required (Current)
 
 ```env
 # .env file
-OPENAI_API_KEY=sk-...          # GPT-4 for security grader
-ANTHROPIC_API_KEY=sk-ant-...   # Claude for logic grader
-GOOGLE_API_KEY=...             # Gemini for performance grader
+OPENROUTER_API_KEY=...         # OpenRouter gateway for graders/judge
+GEMINI_API_KEY=...             # Optional: direct Gemini fallback when OpenRouter is unset
 ```
 
 > [!NOTE]
@@ -479,14 +473,14 @@ python -c "import json; r = json.load(open('report.json')); assert 'issues' in r
 | **Evaluation** | 18-21 | Dataset, metrics, visualizations |
 | **Polish** | 22-23 | README, presentation, final testing |
 
-**Due Date**: January 23, 2025 23:59
+**Due Date**: January 23, 2025 23:59 (original plan date; now past)
 
 ---
 
-## 9. User Confirmed Scope
+## 9. User Confirmed Scope (Current)
 
 > [!NOTE]
 > **Update Recap**:
 > 1. **Project Path**: Confirmed as Alternative Bug Report Tool.
-> 2. **Models**: Using **Gemini 2.0 Flash** and **OpenRouter Free Tier**.
-> 3. **Scope**: **Full Agentic Loop** (Analysis → Report → Proposed Fix → Verification).
+> 2. **Models**: OpenRouter models (configurable in `codereview/config.py`).
+> 3. **Scope**: **Agentic Loop** (Analysis -> Report -> Proposed Fix -> Verification).

@@ -3,7 +3,7 @@
   "consolidated_issues": [
     {
       "severity": "high",
-      "type": "logic",
+      "type": "security",
       "location": {
         "file": "codereview/agent.py",
         "line": 105,
@@ -16,5 +16,5 @@
     }
   ],
   "overall_health_score": 7.0,
-  "summary": "Filtered report after validation. 1 issues retained."
+  "summary": "All three graders identified the same high-severity issue in codereview/agent.py at line 105, where the agent may attempt to apply an empty fix. The issue has high confidence (0.9) and is categorized as both security and logic. The suggested fix is consistent across all reports."
 }

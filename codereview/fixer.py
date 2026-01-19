@@ -1,9 +1,10 @@
 import os
 import subprocess
 import tempfile
-from typing import Optional, Tuple
+from typing import Iterable, Optional, Tuple, List
 from .models import BugIssue
 from .config import VERIFY_COMMAND
+from .diff_utils import parse_unified_diff_files
 
 
 class CodeFixer:
@@ -18,6 +19,15 @@ class CodeFixer:
         except Exception:
             self._backups[file_path] = ""
 
+    def _snapshot_files(self, file_paths: Iterable[str]) -> List[str]:
+        touched: List[str] = []
+        for file_path in file_paths:
+            if not file_path or file_path in touched:
+                continue
+            touched.append(file_path)
+            self._snapshot_file(file_path)
+        return touched
+
     @staticmethod
     def _is_unified_diff(text: str) -> bool:
         return "diff --git" in text or text.startswith("--- ")
@@ -27,12 +37,7 @@ class CodeFixer:
             f.write(patch_text)
             patch_path = f.name
         try:
-            check = subprocess.run(
-                ["git", "apply", "--check", patch_path], capture_output=True, text=True
-            )
-            if check.returncode != 0:
-                self.last_error = f"Patch check failed: {check.stderr}"
-                print(self.last_error)
+            if not self.check_patch(patch_path):
                 return False
             apply = subprocess.run(
                 ["git", "apply", patch_path], capture_output=True, text=True
@@ -183,6 +188,74 @@ class CodeFixer:
 
         return False
 
+    def apply_fix_with_transaction(
+        self,
+        issue: BugIssue,
+        fix_content: str,
+        start_line: Optional[int] = None,
+        end_line: Optional[int] = None,
+        is_patch: bool = False,
+    ) -> Tuple[bool, List[str]]:
+        file_path = issue.location.file
+        if not os.path.exists(file_path):
+            self.last_error = f"File {file_path} not found"
+            return False, []
+
+        touched_files: List[str] = []
+        if is_patch or self._is_unified_diff(fix_content):
+            touched_files = self._snapshot_files(
+                parse_unified_diff_files(fix_content) or [file_path]
+            )
+            applied = self._apply_patch(fix_content)
+            if not applied:
+                self.rollback_files(touched_files)
+            return applied, touched_files
+
+        touched_files = self._snapshot_files([file_path])
+        if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
+            return True, touched_files
+
+        if start_line is None:
+            start_line = issue.location.line
+        if end_line is None:
+            end_line = start_line
+
+        if start_line and start_line > 0:
+            print(
+                f"Evidence mismatch, falling back to line-based fix at line range {start_line}-{end_line}"
+            )
+            applied = self._apply_line_range_fix(
+                file_path, start_line, end_line, fix_content
+            )
+            if not applied:
+                self.rollback_files(touched_files)
+            return applied, touched_files
+
+        self.rollback_files(touched_files)
+        return False, touched_files
+
+    def check_patch_text(self, patch_text: str) -> bool:
+        with tempfile.NamedTemporaryFile("w", delete=False, suffix=".patch") as f:
+            f.write(patch_text)
+            patch_path = f.name
+        try:
+            return self.check_patch(patch_path)
+        finally:
+            try:
+                os.remove(patch_path)
+            except OSError:
+                pass
+
+    def check_patch(self, patch_path: str) -> bool:
+        check = subprocess.run(
+            ["git", "apply", "--check", patch_path], capture_output=True, text=True
+        )
+        if check.returncode != 0:
+            self.last_error = f"Patch check failed: {check.stderr}"
+            print(self.last_error)
+            return False
+        return True
+
     def run_verification(self) -> bool:
         success, _ = self.run_verification_with_output()
         return success
@@ -221,6 +294,10 @@ class CodeFixer:
                 pass
         subprocess.run(["git", "restore", "--", file_path], capture_output=True)
         subprocess.run(["git", "checkout", "--", file_path], capture_output=True)
+
+    def rollback_files(self, file_paths: Iterable[str]) -> None:
+        for file_path in file_paths:
+            self.rollback(file_path)
 
     def get_last_error(self) -> str:
         return self.last_error

@@ -1,0 +1,13 @@
+from enum import Enum
+
+
+class AgentState(str, Enum):
+    VALIDATE_ISSUE = "VALIDATE_ISSUE"
+    BUILD_CONTEXT = "BUILD_CONTEXT"
+    GENERATE_FIX = "GENERATE_FIX"
+    VALIDATE_FIX = "VALIDATE_FIX"
+    APPLY_FIX = "APPLY_FIX"
+    VERIFY = "VERIFY"
+    ROLLBACK = "ROLLBACK"
+    SUCCESS = "SUCCESS"
+    FAIL = "FAIL"

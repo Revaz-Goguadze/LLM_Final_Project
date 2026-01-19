@@ -4,34 +4,12 @@ import re
 from typing import Dict, Set
 
 from .models import FinalReport
+from .diff_utils import parse_changed_lines
 
 class ReportGenerator:
     @staticmethod
     def _parse_changed_lines(diff_text: str) -> Dict[str, Set[int]]:
-        changed: Dict[str, Set[int]] = {}
-        current_file = None
-        current_line = None
-        for line in diff_text.splitlines():
-            if line.startswith("+++ b/"):
-                current_file = line[6:].strip()
-                continue
-            if line.startswith("@@"):
-                match = re.search(r"\+(\d+)(?:,(\d+))?", line)
-                if match:
-                    current_line = int(match.group(1))
-                else:
-                    current_line = None
-                continue
-            if not current_file or current_line is None:
-                continue
-            if line.startswith("+") and not line.startswith("+++"):
-                changed.setdefault(current_file, set()).add(current_line)
-                current_line += 1
-            elif line.startswith("-") and not line.startswith("---"):
-                continue
-            else:
-                current_line += 1
-        return changed
+        return parse_changed_lines(diff_text)
 
     @staticmethod
     def filter_report(report: FinalReport, diff_text: str) -> FinalReport:
