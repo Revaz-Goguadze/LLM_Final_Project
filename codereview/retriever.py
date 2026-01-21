@@ -1,8 +1,6 @@
-import chromadb
 from openai import OpenAI
 from .bm25_index import BM25Index
 from .config import (
-    CHROMA_DB_PATH,
     VECTOR_DB_COLLECTION,
     SEMANTIC_TOP_K,
     BM25_TOP_K,
@@ -11,6 +9,7 @@ from .config import (
     OPENROUTER_API_KEY,
 )
 from .embeddings import get_embedding_function, collection_name, bm25_path
+from .chroma_client import get_chroma_client
 
 
 class HyDEGenerator:
@@ -47,7 +46,7 @@ class HybridRetriever:
         collection: str = VECTOR_DB_COLLECTION,
         bm25_index_path: str = BM25_INDEX_PATH,
     ):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        self.client = get_chroma_client()
         self.emb_fn = get_embedding_function()
         self.collection = self.client.get_collection(
             name=collection_name(collection),
@@ -58,7 +57,13 @@ class HybridRetriever:
         self.hyde = HyDEGenerator() if OPENROUTER_API_KEY else None
 
     def _semantic_search(self, query: str, n_results: int):
-        results = self.collection.query(query_texts=[query], n_results=n_results)
+        try:
+            results = self.collection.query(query_texts=[query], n_results=n_results)
+        except Exception:
+            return []
+
+        if not results.get("ids") or not results["ids"] or not results["ids"][0]:
+            return []
 
         formatted = []
         for i in range(len(results["ids"][0])):

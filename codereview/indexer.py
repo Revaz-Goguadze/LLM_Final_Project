@@ -1,14 +1,14 @@
 import os
-import chromadb
 from .chunker import ASTChunker
-from .config import CHROMA_DB_PATH, VECTOR_DB_COLLECTION, BM25_INDEX_PATH
+from .config import VECTOR_DB_COLLECTION, BM25_INDEX_PATH
 from .bm25_index import BM25Index
 from .embeddings import get_embedding_function, collection_name, bm25_path
 from typing import List
+from .chroma_client import get_chroma_client
 
 class CodebaseIndexer:
     def __init__(self):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        self.client = get_chroma_client()
         
         self.emb_fn = get_embedding_function()
         
@@ -20,9 +20,10 @@ class CodebaseIndexer:
 
     def index_directory(self, directory: str, build_bm25: bool = True):
         """Indexes all supported files in a directory."""
-        for root, dirs, files in os.walk(directory):
+        for root, dirs, files in os.walk(os.path.abspath(directory)):
             # Skip hidden dirs and common exclusions
-            if any(part.startswith('.') for part in root.split(os.sep)):
+            parts = [part for part in root.split(os.sep) if part]
+            if any(part.startswith(".") for part in parts):
                 continue
             if 'venv' in root or '__pycache__' in root or 'node_modules' in root:
                 continue
@@ -47,6 +48,8 @@ class CodebaseIndexer:
         metadatas = []
 
         for i, chunk in enumerate(chunks):
+            if not chunk.content.strip():
+                continue
             chunk_id = f"{chunk.file_path}:{chunk.name}:{i}"
             ids.append(chunk_id)
             documents.append(chunk.content)

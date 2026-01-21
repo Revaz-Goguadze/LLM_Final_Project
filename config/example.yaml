@@ -12,7 +12,7 @@ models:
 
 rag:
   primary:
-    provider: "chromadb"
+    provider: "vector_store"
     top_k: 12
   secondary:
     provider: "docs"
@@ -21,4 +21,3 @@ rag:
 evaluation:
   metrics: ["precision", "recall", "fix_rate"]
   max_fix_attempts: 3
-

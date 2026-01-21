@@ -1,2 +1,10 @@
 .bm25/
+.vector_store/
 .chroma/
+.chroma/
+.bm25/
+__pycache__/
+bug_report*.json
+bug_report*.md
+bug_report_meta.json
+.env

@@ -3,9 +3,9 @@ import math
 import re
 from typing import List
 
-from chromadb.utils import embedding_functions
+from openai import OpenAI
 
-from .config import EMBEDDING_MODE
+from .config import EMBEDDING_MODE, OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL, OPENROUTER_TIMEOUT
 
 
 class LocalHashEmbeddingFunction:
@@ -30,15 +30,34 @@ class LocalHashEmbeddingFunction:
         return "local_hash"
 
 
+class OpenAIEmbeddingFunction:
+    def __init__(self, model: str = OPENAI_EMBEDDING_MODEL):
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY is required for OpenAI embeddings.")
+        self.client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENROUTER_TIMEOUT, max_retries=2)
+        self.model = model
+
+    def __call__(self, input: List[str]) -> List[List[float]]:
+        response = self.client.embeddings.create(model=self.model, input=input)
+        return [item.embedding for item in response.data]
+
+    def name(self) -> str:
+        return "openai"
+
+
 def get_embedding_function():
     if EMBEDDING_MODE == "local":
         return LocalHashEmbeddingFunction()
-    return embedding_functions.DefaultEmbeddingFunction()
+    if EMBEDDING_MODE == "openai":
+        return OpenAIEmbeddingFunction()
+    raise ValueError(f"Unsupported EMBEDDING_MODE: {EMBEDDING_MODE}")
 
 
 def collection_name(base: str) -> str:
     if EMBEDDING_MODE == "local":
         return f"{base}_local"
+    if EMBEDDING_MODE == "openai":
+        return f"{base}_openai"
     return base
 
 
@@ -47,4 +66,8 @@ def bm25_path(base_path: str) -> str:
         if base_path.endswith(".pkl"):
             return base_path.replace(".pkl", "_local.pkl")
         return f"{base_path}_local"
+    if EMBEDDING_MODE == "openai":
+        if base_path.endswith(".pkl"):
+            return base_path.replace(".pkl", "_openai.pkl")
+        return f"{base_path}_openai"
     return base_path

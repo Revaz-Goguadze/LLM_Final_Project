@@ -3,7 +3,7 @@ import subprocess
 import tempfile
 from typing import Iterable, Optional, Tuple, List
 from .models import BugIssue
-from .config import VERIFY_COMMAND
+from .config import VERIFY_COMMAND, ALLOW_FIX_PATCH
 from .diff_utils import parse_unified_diff_files
 
 
@@ -11,6 +11,7 @@ class CodeFixer:
     def __init__(self):
         self.last_error = ""
         self._backups = {}
+        self._allow_patch = ALLOW_FIX_PATCH
 
     def _snapshot_file(self, file_path: str) -> None:
         try:
@@ -149,9 +150,18 @@ class CodeFixer:
         print(f"Applying fix to {file_path}...")
         self._snapshot_file(file_path)
         suggested = issue.suggested_fix or ""
-        if self._is_unified_diff(suggested):
+        if self._allow_patch and self._is_unified_diff(suggested):
             return self._apply_patch(suggested)
-        return self._apply_simple_replace(file_path, issue.evidence or "", suggested)
+        if self._apply_simple_replace(file_path, issue.evidence or "", suggested):
+            return True
+        if issue.location.line and issue.location.line > 0:
+            print(
+                f"Evidence mismatch, falling back to line-based fix at line {issue.location.line}"
+            )
+            return self._apply_line_range_fix(
+                file_path, issue.location.line, issue.location.line, suggested
+            )
+        return False
 
     def apply_fix_with_content(
         self,
@@ -169,7 +179,7 @@ class CodeFixer:
         print(f"Applying fix to {file_path}...")
         self._snapshot_file(file_path)
 
-        if is_patch or self._is_unified_diff(fix_content):
+        if self._allow_patch and (is_patch or self._is_unified_diff(fix_content)):
             return self._apply_patch(fix_content)
 
         if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
@@ -202,7 +212,7 @@ class CodeFixer:
             return False, []
 
         touched_files: List[str] = []
-        if is_patch or self._is_unified_diff(fix_content):
+        if self._allow_patch and (is_patch or self._is_unified_diff(fix_content)):
             touched_files = self._snapshot_files(
                 parse_unified_diff_files(fix_content) or [file_path]
             )

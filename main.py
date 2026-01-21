@@ -3,14 +3,9 @@ import typer
 from rich import print
 import json
 from codereview.git_analyzer import GitAnalyzer
-from codereview.indexer import CodebaseIndexer
-from codereview.retriever import HybridRetriever
-from codereview.docs_indexer import DocsIndexer
 from codereview.grader import MultiLLMGrader
 from codereview.report_generator import ReportGenerator
 from codereview.rag_builder import build_rag_query, build_context_block, build_analysis_input
-from codereview.evaluator import EvaluationRunner
-from codereview.eval_plots import generate_plots
 from codereview.config import (
     MODEL_GRADER_SECURITY,
     MODEL_GRADER_LOGIC,
@@ -21,9 +16,38 @@ from codereview.config import (
 
 app = typer.Typer()
 
+def _read_target_files(path: str) -> list[str]:
+    paths: list[str] = []
+    if os.path.isdir(path):
+        for root, dirs, files in os.walk(os.path.abspath(path)):
+            parts = [part for part in root.split(os.sep) if part]
+            if any(part.startswith(".") for part in parts):
+                continue
+            if "venv" in root or "__pycache__" in root or "node_modules" in root:
+                continue
+            for file in files:
+                if file.endswith((".py", ".js", ".jsx", ".ts", ".tsx")):
+                    paths.append(os.path.join(root, file))
+    elif os.path.isfile(path):
+        paths.append(os.path.abspath(path))
+    return paths
+
+def _build_snapshot(paths: list[str], max_chars: int = 2000) -> str:
+    blocks = []
+    for file_path in paths:
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except Exception:
+            continue
+        content = content[:max_chars]
+        blocks.append(f"FILE: {file_path}\n{content}")
+    return "\n\n".join(blocks)
+
 @app.command()
 def index(path: str = "."):
     """Index the codebase (Code RAG)."""
+    from codereview.indexer import CodebaseIndexer
     print(f"[bold blue]Indexing codebase at {path}...[/bold blue]")
     indexer = CodebaseIndexer()
     indexer.index_directory(path)
@@ -32,6 +56,7 @@ def index(path: str = "."):
 @app.command()
 def index_docs(path: str = "docs"):
     """Index best practices documentation (Documentation RAG)."""
+    from codereview.docs_indexer import DocsIndexer
     print(f"[bold blue]Indexing documentation at {path}...[/bold blue]")
     indexer = DocsIndexer()
     indexer.index_directory(path)
@@ -42,6 +67,7 @@ def analyze(
     staged: bool = False,
     unstaged: bool = False,
     last_commit: bool = False,
+    path: str = None,
     query: str = None,
     use_rag: bool = typer.Option(True, "--use-rag/--no-use-rag"),
     use_docs_rag: bool = typer.Option(True, "--use-docs-rag/--no-use-docs-rag"),
@@ -53,25 +79,30 @@ def analyze(
     """Analyze changes for bugs and bad practices."""
     print("[bold blue]Starting analysis...[/bold blue]")
     
-    # 1. Extract Diffs
-    analyzer = GitAnalyzer()
-    diffs = analyzer.get_diffs()
-    
     target_diff = ""
     diff_type = "changes"
-    if staged: 
-        target_diff = diffs.staged
-        diff_type = "staged changes"
-    elif unstaged: 
-        target_diff = diffs.unstaged
-        diff_type = "unstaged changes"
-    elif last_commit: 
-        target_diff = diffs.last_commit
-        diff_type = "last commit"
+    if path:
+        target_paths = _read_target_files(path)
+        target_diff = _build_snapshot(target_paths)
+        diff_type = f"files under {path}"
     else:
-        # Default to unstaged or staged
-        target_diff = diffs.unstaged or diffs.staged
-        diff_type = "current changes"
+        # 1. Extract Diffs
+        analyzer = GitAnalyzer()
+        diffs = analyzer.get_diffs()
+        
+        if staged: 
+            target_diff = diffs.staged
+            diff_type = "staged changes"
+        elif unstaged: 
+            target_diff = diffs.unstaged
+            diff_type = "unstaged changes"
+        elif last_commit: 
+            target_diff = diffs.last_commit
+            diff_type = "last commit"
+        else:
+            # Default to unstaged or staged
+            target_diff = diffs.unstaged or diffs.staged
+            diff_type = "current changes"
         
     if not target_diff:
         print("[yellow]No diff found to analyze.[/yellow]")
@@ -88,18 +119,52 @@ def analyze(
     if use_rag:
         print("[blue]RAG #1: Retrieving related code from indexed codebase...[/blue]")
         try:
+            from codereview.retriever import HybridRetriever
             code_retriever = HybridRetriever()
             related_chunks = code_retriever.search(rag_query, n_results=top_k)
             code_context = build_context_block(related_chunks)
             print(f"[green]Found {len(related_chunks)} related code chunks.[/green]")
+            if not related_chunks:
+                print("[yellow]No code chunks found. Rebuilding index and retrying...[/yellow]")
+                from codereview.indexer import CodebaseIndexer
+                CodebaseIndexer().index_directory(path or os.getcwd())
+                code_retriever = HybridRetriever()
+                related_chunks = code_retriever.search(rag_query, n_results=top_k)
+                code_context = build_context_block(related_chunks)
+                print(f"[green]Found {len(related_chunks)} related code chunks.[/green]")
         except Exception as e:
             print(f"[yellow]Warning: Code RAG failed: {e}[/yellow]")
+            if "Collection" in str(e) and "does not exist" in str(e):
+                print("[yellow]Rebuilding code index and retrying...[/yellow]")
+                from codereview.indexer import CodebaseIndexer
+                CodebaseIndexer().index_directory(os.getcwd())
+                try:
+                    from codereview.retriever import HybridRetriever
+                    code_retriever = HybridRetriever()
+                    related_chunks = code_retriever.search(rag_query, n_results=top_k)
+                    code_context = build_context_block(related_chunks)
+                    print(f"[green]Found {len(related_chunks)} related code chunks.[/green]")
+                except Exception as retry_error:
+                    print(f"[yellow]Warning: Code RAG retry failed: {retry_error}[/yellow]")
+            elif "list index out of range" in str(e):
+                print("[yellow]Rebuilding code index and retrying...[/yellow]")
+                from codereview.indexer import CodebaseIndexer
+                CodebaseIndexer().index_directory(path or os.getcwd())
+                try:
+                    from codereview.retriever import HybridRetriever
+                    code_retriever = HybridRetriever()
+                    related_chunks = code_retriever.search(rag_query, n_results=top_k)
+                    code_context = build_context_block(related_chunks)
+                    print(f"[green]Found {len(related_chunks)} related code chunks.[/green]")
+                except Exception as retry_error:
+                    print(f"[yellow]Warning: Code RAG retry failed: {retry_error}[/yellow]")
     
     # 3. RAG #2: Documentation Context - Find relevant best practices
     docs_context = ""
     if use_docs_rag:
         print("[blue]RAG #2: Retrieving best practices from documentation...[/blue]")
         try:
+            from codereview.retriever import HybridRetriever
             docs_retriever = HybridRetriever(
                 collection=DOCS_DB_COLLECTION,
                 bm25_index_path=DOCS_BM25_INDEX_PATH,
@@ -107,8 +172,49 @@ def analyze(
             related_docs = docs_retriever.search(rag_query, n_results=docs_top_k)
             docs_context = build_context_block(related_docs) if related_docs else ""
             print(f"[green]Found {len(related_docs)} relevant best practices.[/green]")
+            if not related_docs:
+                print("[yellow]No docs found. Rebuilding docs index and retrying...[/yellow]")
+                from codereview.docs_indexer import DocsIndexer
+                DocsIndexer().index_directory("docs")
+                docs_retriever = HybridRetriever(
+                    collection=DOCS_DB_COLLECTION,
+                    bm25_index_path=DOCS_BM25_INDEX_PATH,
+                )
+                related_docs = docs_retriever.search(rag_query, n_results=docs_top_k)
+                docs_context = build_context_block(related_docs) if related_docs else ""
+                print(f"[green]Found {len(related_docs)} relevant best practices.[/green]")
         except Exception as e:
             print(f"[yellow]Warning: Docs RAG failed: {e}[/yellow]")
+            if "Collection" in str(e) and "does not exist" in str(e):
+                print("[yellow]Rebuilding docs index and retrying...[/yellow]")
+                from codereview.docs_indexer import DocsIndexer
+                DocsIndexer().index_directory("docs")
+                try:
+                    from codereview.retriever import HybridRetriever
+                    docs_retriever = HybridRetriever(
+                        collection=DOCS_DB_COLLECTION,
+                        bm25_index_path=DOCS_BM25_INDEX_PATH,
+                    )
+                    related_docs = docs_retriever.search(rag_query, n_results=docs_top_k)
+                    docs_context = build_context_block(related_docs) if related_docs else ""
+                    print(f"[green]Found {len(related_docs)} relevant best practices.[/green]")
+                except Exception as retry_error:
+                    print(f"[yellow]Warning: Docs RAG retry failed: {retry_error}[/yellow]")
+            elif "list index out of range" in str(e):
+                print("[yellow]Rebuilding docs index and retrying...[/yellow]")
+                from codereview.docs_indexer import DocsIndexer
+                DocsIndexer().index_directory("docs")
+                try:
+                    from codereview.retriever import HybridRetriever
+                    docs_retriever = HybridRetriever(
+                        collection=DOCS_DB_COLLECTION,
+                        bm25_index_path=DOCS_BM25_INDEX_PATH,
+                    )
+                    related_docs = docs_retriever.search(rag_query, n_results=docs_top_k)
+                    docs_context = build_context_block(related_docs) if related_docs else ""
+                    print(f"[green]Found {len(related_docs)} relevant best practices.[/green]")
+                except Exception as retry_error:
+                    print(f"[yellow]Warning: Docs RAG retry failed: {retry_error}[/yellow]")
     
     # 4. Combine all contexts for comprehensive analysis
     combined_context = "\n\n".join(
@@ -187,6 +293,8 @@ def evaluate(
     docs_top_k: int = typer.Option(4, "--docs-top-k"),
 ):
     """Run evaluation on a labeled dataset."""
+    from codereview.evaluator import EvaluationRunner
+    from codereview.eval_plots import generate_plots
     runner = EvaluationRunner(
         use_rag=use_rag, use_docs_rag=use_docs_rag, top_k=top_k, docs_top_k=docs_top_k
     )
