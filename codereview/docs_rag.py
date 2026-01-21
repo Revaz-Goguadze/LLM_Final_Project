@@ -1,7 +1,6 @@
 import os
-import chromadb
-from chromadb.utils import embedding_functions
-from .config import CHROMA_DB_PATH
+from .chroma_client import get_chroma_client
+from .embeddings import get_embedding_function
 
 DOCS_COLLECTION = "best_practices_docs"
 
@@ -9,8 +8,8 @@ class DocsIndexer:
     """Indexes best practices and documentation for the Documentation RAG."""
     
     def __init__(self):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        self.emb_fn = embedding_functions.DefaultEmbeddingFunction()
+        self.client = get_chroma_client()
+        self.emb_fn = get_embedding_function()
         self.collection = self.client.get_or_create_collection(
             name=DOCS_COLLECTION,
             embedding_function=self.emb_fn
@@ -84,8 +83,8 @@ class DocsRetriever:
     """Retrieves relevant best practices based on the code being analyzed."""
     
     def __init__(self):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
-        self.emb_fn = embedding_functions.DefaultEmbeddingFunction()
+        self.client = get_chroma_client()
+        self.emb_fn = get_embedding_function()
         self.collection = self.client.get_or_create_collection(
             name=DOCS_COLLECTION,
             embedding_function=self.emb_fn
@@ -99,6 +98,8 @@ class DocsRetriever:
         )
         
         formatted = []
+        if not results.get("ids") or not results["ids"] or not results["ids"][0]:
+            return formatted
         for i in range(len(results['ids'][0])):
             formatted.append({
                 "id": results['ids'][0][i],

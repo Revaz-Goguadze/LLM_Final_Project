@@ -36,6 +36,10 @@ class BM25Index:
         self.documents = data["documents"]
         self.metadatas = data["metadatas"]
 
+        if not self.documents:
+            self.bm25 = None
+            return
+
         tokenized = [_tokenize(doc) for doc in self.documents]
         self.bm25 = BM25Okapi(tokenized)
 

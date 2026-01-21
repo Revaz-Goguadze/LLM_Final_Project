@@ -1,11 +1,10 @@
 import os
 from typing import List, Dict, Any
 
-import chromadb
-
-from .config import CHROMA_DB_PATH, DOCS_DB_COLLECTION, DOCS_BM25_INDEX_PATH
+from .config import DOCS_DB_COLLECTION, DOCS_BM25_INDEX_PATH
 from .bm25_index import BM25Index
 from .embeddings import get_embedding_function, collection_name, bm25_path
+from .chroma_client import get_chroma_client
 
 
 def _split_by_heading(text: str) -> List[str]:
@@ -25,7 +24,7 @@ def _split_by_heading(text: str) -> List[str]:
 
 class DocsIndexer:
     def __init__(self):
-        self.client = chromadb.PersistentClient(path=CHROMA_DB_PATH)
+        self.client = get_chroma_client()
         self.emb_fn = get_embedding_function()
         self.collection = self.client.get_or_create_collection(
             name=collection_name(DOCS_DB_COLLECTION),
@@ -56,6 +55,8 @@ class DocsIndexer:
         documents: List[str] = []
         metadatas: List[Dict[str, Any]] = []
         for idx, chunk in enumerate(chunks):
+            if not chunk.strip():
+                continue
             chunk_id = f"{file_path}:section:{idx}"
             ids.append(chunk_id)
             documents.append(chunk)

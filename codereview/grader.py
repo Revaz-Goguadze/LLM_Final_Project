@@ -3,7 +3,7 @@ import re
 from typing import Any, List
 from openai import OpenAI
 from .models import GraderReport, FinalReport
-from .config import OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE
+from .config import OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE, OPENROUTER_TIMEOUT
 
 USE_OPENROUTER = bool(OPENROUTER_API_KEY)
 
@@ -14,6 +14,8 @@ class MultiLLMGrader:
             self.client = OpenAI(
                 base_url="https://openrouter.ai/api/v1",
                 api_key=OPENROUTER_API_KEY,
+                timeout=OPENROUTER_TIMEOUT,
+                max_retries=2,
             )
             self.model_name = model_name
         else:
@@ -135,26 +137,40 @@ Code to analyze:
         prompt = self._get_grading_prompt(role, code)
 
         try:
-            if USE_OPENROUTER:
-                response = self.client.chat.completions.create(
-                    model=model_id,
-                    messages=[{"role": "user", "content": prompt}],
+            content = ""
+            data = None
+            for attempt in range(2):
+                if USE_OPENROUTER:
+                    response = self.client.chat.completions.create(
+                        model=model_id,
+                        messages=[{"role": "user", "content": prompt}],
+                        timeout=OPENROUTER_TIMEOUT,
+                    )
+                    if not response.choices or not response.choices[0].message:
+                        raise ValueError("No response choices returned")
+                    content = response.choices[0].message.content
+                else:
+                    response = self.model.generate_content(prompt)
+                    content = response.text
+
+                print(
+                    f"[DEBUG] Raw response for {role}: {content[:200] if content else 'EMPTY'}..."
                 )
-                if not response.choices or not response.choices[0].message:
-                    raise ValueError("No response choices returned")
-                content = response.choices[0].message.content
-            else:
-                response = self.model.generate_content(prompt)
-                content = response.text
 
-            print(
-                f"[DEBUG] Raw response for {role}: {content[:200] if content else 'EMPTY'}..."
-            )
+                if not content:
+                    raise ValueError("Empty response from model")
 
-            if not content:
+                try:
+                    data = self._safe_json_loads(content)
+                    break
+                except ValueError:
+                    if attempt == 0 and USE_OPENROUTER:
+                        continue
+                    raise
+
+            if data is None:
                 raise ValueError("Empty response from model")
 
-            data = self._safe_json_loads(content)
             data = self._coerce_grader_payload(data)
             data["grader_id"] = (
                 f"{role}_{model_id.split('/')[-1].split(':')[0] if '/' in model_id else model_id}"
@@ -191,6 +207,7 @@ Code to analyze:
                 response = self.client.chat.completions.create(
                     model=MODEL_JUDGE,
                     messages=[{"role": "user", "content": prompt}],
+                    timeout=OPENROUTER_TIMEOUT,
                 )
                 if not response.choices or not response.choices[0].message:
                     raise ValueError("No response choices returned")

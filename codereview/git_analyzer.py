@@ -10,18 +10,38 @@ class GitAnalyzer:
         except Exception as e:
             # If not a repo, initialize one for testing or raise
             raise Exception(f"Path {repo_path} is not a valid git repository: {e}")
+        self._ignore_prefixes = (
+            ".bm25/",
+            ".vector_store/",
+            ".chroma/",
+            "__pycache__/",
+            "bug_report",
+            ".env",
+            ".pytest_cache/",
+        )
 
     def get_diffs(self) -> GitDiff:
         """Extracts staged, unstaged and last commit diffs."""
+        excludes = [
+            "--",
+            ".",
+            ":(exclude,glob).bm25/**",
+            ":(exclude,glob).vector_store/**",
+            ":(exclude,glob).chroma/**",
+            ":(exclude,glob)**/__pycache__/**",
+            ":(exclude,glob)bug_report*",
+            ":(exclude,glob).env",
+            ":(exclude,glob).pytest_cache/**",
+        ]
         # Staged changes (index)
-        staged_diff = self.repo.git.diff("--cached")
+        staged_diff = self.repo.git.diff("--cached", *excludes)
         
         # Unstaged changes (working tree)
-        unstaged_diff = self.repo.git.diff()
+        unstaged_diff = self.repo.git.diff(*excludes)
         
         # Last commit vs previous (HEAD vs HEAD~1)
         try:
-            last_commit_diff = self.repo.git.diff("HEAD~1", "HEAD")
+            last_commit_diff = self.repo.git.diff("HEAD~1", "HEAD", *excludes)
         except Exception:
             last_commit_diff = ""  # Initial commit?
             
@@ -31,6 +51,7 @@ class GitAnalyzer:
             [item.a_path for item in self.repo.index.diff("HEAD")] +
             (self._get_files_from_diff(last_commit_diff) if last_commit_diff else [])
         ))
+        changed_files = [path for path in changed_files if not self._is_ignored(path)]
         
         return GitDiff(
             staged=staged_diff,
@@ -45,6 +66,9 @@ class GitAnalyzer:
             if line.startswith('--- a/') or line.startswith('+++ b/'):
                 files.append(line[6:].strip())
         return list(set(files))
+
+    def _is_ignored(self, path: str) -> bool:
+        return any(path.startswith(prefix) for prefix in self._ignore_prefixes)
 
 if __name__ == "__main__":
     analyzer = GitAnalyzer()

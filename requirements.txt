@@ -1,7 +1,7 @@
 pydantic
 python-dotenv
 GitPython
-chromadb
+numpy
 openai
 rank_bm25
 matplotlib
@@ -11,4 +11,4 @@ typer
 rich
 pytest
 tree-sitter
-tree-sitter-languages
+tree-sitter-languages; python_version < "3.14"

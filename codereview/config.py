@@ -15,7 +15,7 @@ MODEL_GRADER_PERF = "mistralai/devstral-2512:free"
 MODEL_JUDGE = "mistralai/devstral-2512:free"
 
 # Storage
-CHROMA_DB_PATH = os.getenv("CHROMA_DB_PATH", os.path.join(os.getcwd(), ".chroma"))
+VECTOR_STORE_PATH = os.getenv("VECTOR_STORE_PATH", os.path.join(os.getcwd(), ".vector_store"))
 VECTOR_DB_COLLECTION = "codebase"
 DOCS_DB_COLLECTION = "docs"
 BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "index.pkl")
@@ -30,7 +30,10 @@ HYBRID_ALPHA = 0.6
 MAX_FIX_RETRIES = 3
 CONTEXT_WINDOW_REDUCTION_SUMMARY = True
 VERIFY_COMMAND = os.getenv("VERIFY_COMMAND", "pytest")
-EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "default")
+EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "openai")
+OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
+OPENROUTER_TIMEOUT = float(os.getenv("OPENROUTER_TIMEOUT", "60"))
+ALLOW_FIX_PATCH = os.getenv("ALLOW_FIX_PATCH", "false").lower() in ("1", "true", "yes")
 
 
 def missing_api_keys() -> list[str]:
