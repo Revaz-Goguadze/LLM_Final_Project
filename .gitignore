@@ -8,3 +8,5 @@ bug_report*.json
 bug_report*.md
 bug_report_meta.json
 .env
+evaluation/fix_history.json
+runs/

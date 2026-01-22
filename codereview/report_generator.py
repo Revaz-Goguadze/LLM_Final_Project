@@ -4,6 +4,7 @@ import re
 from typing import Dict, Set
 
 from .models import FinalReport
+from .chunker import ASTChunker
 from .diff_utils import parse_changed_lines
 
 class ReportGenerator:
@@ -13,6 +14,8 @@ class ReportGenerator:
             return report
 
         file_cache: Dict[str, list[str]] = {}
+        chunker = ASTChunker()
+        chunk_cache: Dict[str, list] = {}
         for issue in report.consolidated_issues:
             if not issue.location or not issue.location.file:
                 continue
@@ -38,6 +41,20 @@ class ReportGenerator:
                     lines = file_cache.get(file_path, [])
                     if line_no <= len(lines):
                         issue.line_text = lines[line_no - 1].rstrip("\n")
+                if (
+                    issue.chunk_start_line is None
+                    or issue.chunk_end_line is None
+                    or issue.chunk_name is None
+                ):
+                    if file_path not in chunk_cache:
+                        chunk_cache[file_path] = chunker.chunk_file(file_path)
+                    for chunk in chunk_cache[file_path]:
+                        if chunk.start_line <= line_no <= chunk.end_line:
+                            issue.chunk_start_line = chunk.start_line
+                            issue.chunk_end_line = chunk.end_line
+                            issue.chunk_name = chunk.name
+                            issue.chunk_type = chunk.type
+                            break
 
         return report
 
@@ -127,6 +144,10 @@ class ReportGenerator:
                     md += f"- **Line Range**: {issue.start_line}-{issue.end_line}\n"
                 if issue.line_text:
                     md += f"- **Line Text**: `{issue.line_text}`\n"
+                if issue.chunk_start_line and issue.chunk_end_line:
+                    md += f"- **Chunk Range**: {issue.chunk_start_line}-{issue.chunk_end_line}\n"
+                if issue.chunk_name:
+                    md += f"- **Chunk Name**: {issue.chunk_name} ({issue.chunk_type})\n"
                 md += f"- **Description**: {issue.description}\n"
                 md += f"- **Evidence**: `{issue.evidence}`\n"
                 md += f"- **Suggested Fix**: {issue.suggested_fix}\n\n"

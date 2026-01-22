@@ -18,6 +18,10 @@ class BugIssue(BaseModel):
     start_line: Optional[int] = None
     end_line: Optional[int] = None
     line_text: Optional[str] = None
+    chunk_name: Optional[str] = None
+    chunk_type: Optional[str] = None
+    chunk_start_line: Optional[int] = None
+    chunk_end_line: Optional[int] = None
 
 class BestPracticeViolation(BaseModel):
     rule: str

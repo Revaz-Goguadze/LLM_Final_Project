@@ -19,6 +19,7 @@ class CodeChunk:
 class ASTChunker:
     def __init__(self):
         self._ts_parsers = {}
+        self._max_line_digits = 6
 
     def _get_ts_parser(self, language: str):
         if not get_parser:
@@ -26,6 +27,15 @@ class ASTChunker:
         if language not in self._ts_parsers:
             self._ts_parsers[language] = get_parser(language)
         return self._ts_parsers[language]
+
+    def _with_line_numbers(self, lines: List[str], start_line: int, end_line: int) -> str:
+        width = max(self._max_line_digits, len(str(end_line)))
+        numbered = [
+            f"{i:>{width}}: {lines[i - 1]}"
+            for i in range(start_line, end_line + 1)
+            if 0 < i <= len(lines)
+        ]
+        return "\n".join(numbered)
 
     def _chunk_with_tree_sitter(self, file_path: str, language: str) -> List[CodeChunk]:
         parser = self._get_ts_parser(language)
@@ -55,7 +65,7 @@ class ASTChunker:
             if node.type in target_types:
                 start_line = node.start_point[0] + 1
                 end_line = node.end_point[0] + 1
-                chunk_content = "\n".join(lines[start_line - 1 : end_line])
+                chunk_content = self._with_line_numbers(lines, start_line, end_line)
                 name = node.type
                 if node.child_by_field_name("name"):
                     name_node = node.child_by_field_name("name")
@@ -91,16 +101,22 @@ class ASTChunker:
                 source = f.read()
             
             tree = ast.parse(source)
+            lines = source.splitlines()
             chunks = []
             
             for node in ast.walk(tree):
                 if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
                     # Extract the lines for this node
-                    lines = source.splitlines()
                     start = node.lineno
-                    end = getattr(node, 'end_lineno', start + 1) # end_lineno added in 3.8
+                    if getattr(node, "decorator_list", None):
+                        decorator_lines = [
+                            getattr(dec, "lineno", start)
+                            for dec in node.decorator_list
+                        ]
+                        start = min([start] + decorator_lines)
+                    end = getattr(node, 'end_lineno', start) # end_lineno added in 3.8
                     
-                    chunk_content = "\n".join(lines[start-1:end])
+                    chunk_content = self._with_line_numbers(lines, start, end)
                     node_type = 'class' if isinstance(node, ast.ClassDef) else 'function'
                     
                     chunks.append(CodeChunk(
@@ -133,11 +149,13 @@ class ASTChunker:
         try:
             with open(file_path, 'r', encoding='utf-8') as f:
                 source = f.read()
+            lines = source.splitlines()
+            end_line = len(lines)
             return [CodeChunk(
-                content=source,
+                content=self._with_line_numbers(lines, 1, end_line),
                 file_path=file_path,
                 start_line=1,
-                end_line=len(source.splitlines()),
+                end_line=end_line,
                 name=os.path.basename(file_path),
                 type='module'
             )]
