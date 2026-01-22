@@ -403,7 +403,8 @@ plots = [
 
 ```env
 # .env file
-OPENROUTER_API_KEY=...         # OpenRouter gateway for graders/judge
+GEMINI_API_KEY=...             # Gemini API key for graders/judge
+OPENAI_API_KEY=...             # OpenAI API key for embeddings
 GEMINI_API_KEY=...             # Optional: direct Gemini fallback when OpenRouter is unset
 ```
 

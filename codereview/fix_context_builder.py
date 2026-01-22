@@ -29,13 +29,16 @@ class FixContextBuilder:
         diff_text: Optional[str] = None,
         attempt: int = 1,
         previous_error: Optional[str] = None,
+        context_multiplier: float = 1.0,
     ) -> FixContext:
         """
         Build comprehensive fix context using dual-RAG and file analysis.
         Context expands with each attempt.
         """
         # Expand context radius on retries
-        context_radius = int(self.base_context_radius * (1.5 ** (attempt - 1)))
+        context_radius = int(
+            self.base_context_radius * context_multiplier * (1.5 ** (attempt - 1))
+        )
 
         # 1. Read file context (expanded on retries)
         file_context = self._read_file_context(

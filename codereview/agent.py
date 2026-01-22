@@ -2,22 +2,35 @@ import json
 import os
 import re
 import uuid
-from typing import Optional, Tuple, Dict, Set
+from typing import Optional, Tuple, Dict, Set, List
 
 from openai import OpenAI
 
 from .config import (
-    OPENROUTER_API_KEY,
+    OPENAI_API_KEY,
+    GEMINI_API_KEY,
+    LLM_PROVIDER,
     MODEL_JUDGE,
-    MAX_FIX_RETRIES,
+    GEMINI_MODEL,
+    OPENAI_TIMEOUT,
+    LLM_MIN_DELAY,
+    LLM_MAX_RETRIES,
     DOCS_DB_COLLECTION,
     DOCS_BM25_INDEX_PATH,
+    VERIFY_COMMAND,
 )
 from .retriever import HybridRetriever
 from .fixer import CodeFixer
-from .models import BugIssue
+from .models import BugIssue, FixContext, FixFormat
 from .diff_utils import parse_changed_lines, parse_unified_diff_files
-from .agent_state import AgentState
+from .error_classifier import ErrorClassifier
+from .fix_context_builder import FixContextBuilder
+from .fix_strategy_selector import FixStrategySelector
+from .fix_tracker import FixTracker
+from .fix_verifier import FixVerifier
+from .fix_loop import FixLoopRunner
+from .llm_utils import RateLimiter, should_retry, backoff_sleep
+from .gemini_client import GeminiClient
 
 
 def _range_overlaps(start_line: int, end_line: int, changed: Set[int]) -> bool:
@@ -29,19 +42,39 @@ def _range_overlaps(start_line: int, end_line: int, changed: Set[int]) -> bool:
 
 class ReActAgent:
     def __init__(self):
-        if not OPENROUTER_API_KEY:
-            raise ValueError("OPENROUTER_API_KEY is required for fix generation.")
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
-        )
+        self.rate_limiter = RateLimiter(LLM_MIN_DELAY)
         self.model = MODEL_JUDGE
+        self.provider = LLM_PROVIDER
+        if LLM_PROVIDER == "gemini":
+            if not GEMINI_API_KEY:
+                raise ValueError("GEMINI_API_KEY is required for fix generation.")
+            self.client = GeminiClient(
+                api_key=GEMINI_API_KEY,
+                model=GEMINI_MODEL,
+                min_delay=LLM_MIN_DELAY,
+                max_retries=LLM_MAX_RETRIES,
+            )
+        else:
+            if not OPENAI_API_KEY:
+                raise ValueError("OPENAI_API_KEY is required for fix generation.")
+            self.client = OpenAI(
+                api_key=OPENAI_API_KEY,
+                timeout=OPENAI_TIMEOUT,
+                max_retries=2,
+            )
         self.retriever = HybridRetriever()
         self.docs_retriever = HybridRetriever(
             collection=DOCS_DB_COLLECTION,
             bm25_index_path=DOCS_BM25_INDEX_PATH,
         )
         self.fixer = CodeFixer()
+        self.fix_context_builder = FixContextBuilder(
+            self.retriever, self.docs_retriever
+        )
+        self.fix_strategy_selector = FixStrategySelector()
+        self.fix_verifier = FixVerifier(verify_command=VERIFY_COMMAND)
+        self.fix_tracker = FixTracker()
+        self.error_classifier = ErrorClassifier()
 
     def _read_file_lines(self, file_path: str) -> list:
         if not os.path.exists(file_path):
@@ -132,7 +165,11 @@ class ReActAgent:
         return payload
 
     def _validate_fix_payload(
-        self, issue: BugIssue, payload: dict, diff_text: Optional[str] = None
+        self,
+        issue: BugIssue,
+        payload: dict,
+        diff_text: Optional[str] = None,
+        expected_format: Optional[FixFormat] = None,
     ) -> Tuple[bool, str, dict]:
         if not payload:
             return False, "Empty fix payload", {}
@@ -140,6 +177,12 @@ class ReActAgent:
         fix_format = str(payload.get("format", "")).lower().strip()
         if fix_format not in {"patch", "replace"}:
             return False, f"Unsupported fix format: {fix_format}", {}
+        if expected_format and fix_format != expected_format.value:
+            return (
+                False,
+                f"Fix format must be '{expected_format.value}' for this attempt",
+                {},
+            )
 
         if fix_format == "patch":
             patch_text = str(payload.get("patch", ""))
@@ -160,8 +203,8 @@ class ReActAgent:
         if not replacement:
             return False, "Missing replacement content", {}
 
-        start_line = payload.get("start_line") or issue.location.line
-        end_line = payload.get("end_line") or start_line
+        start_line = payload.get("start_line") or issue.start_line or issue.location.line
+        end_line = payload.get("end_line") or issue.end_line or start_line
         try:
             start_line = int(start_line) if start_line is not None else None
             end_line = int(end_line) if end_line is not None else start_line
@@ -172,6 +215,23 @@ class ReActAgent:
             return False, "Invalid start_line in payload", {}
         if not end_line or end_line < start_line:
             return False, "Invalid end_line in payload", {}
+
+        if issue.start_line and issue.end_line:
+            if start_line != issue.start_line or end_line != issue.end_line:
+                return (
+                    False,
+                    "Replacement must match the target line range from the report",
+                    {},
+                )
+
+        if issue.line_text:
+            target_text = issue.line_text.strip()
+            replacement_lines = [line for line in replacement.splitlines() if line.strip()]
+            if start_line == end_line and len(replacement_lines) > 5:
+                return False, "Replacement too large for a single-line target", {}
+            if target_text and not target_text.startswith(("def ", "class ")):
+                if any(line.lstrip().startswith(("def ", "class ")) for line in replacement_lines):
+                    return False, "Replacement introduces a new definition outside target scope", {}
 
         if diff_text:
             changed_lines = parse_changed_lines(diff_text).get(issue.location.file, set())
@@ -220,19 +280,68 @@ INSTRUCTIONS:
 4. NO markdown, NO code blocks, NO explanations
 5. Output JSON only"""
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-            )
-            if response.choices and response.choices[0].message:
-                content = response.choices[0].message.content or ""
-                return prompt, content
-            return prompt, ""
-        except Exception as e:
-            print(f"Error generating fix: {e}")
-            return prompt, ""
+        for attempt in range(LLM_MAX_RETRIES):
+            try:
+                self.rate_limiter.wait()
+                if self.provider == "gemini":
+                    content = self.client.generate(prompt)
+                    return prompt, content
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    timeout=OPENAI_TIMEOUT,
+                )
+                if response.choices and response.choices[0].message:
+                    content = response.choices[0].message.content or ""
+                    return prompt, content
+                return prompt, ""
+            except Exception as e:
+                message = str(e)
+                if attempt < LLM_MAX_RETRIES - 1 and should_retry(message):
+                    backoff_sleep(attempt)
+                    continue
+                print(f"Error generating fix: {e}")
+                return prompt, ""
+
+    def _format_fix_context(self, fix_context: FixContext) -> str:
+        blocks = []
+        if fix_context.file_context:
+            blocks.append(f"FILE_CONTEXT:\n{fix_context.file_context}")
+        if fix_context.diff_context:
+            blocks.append(f"DIFF_CONTEXT:\n{fix_context.diff_context}")
+        if fix_context.related_files:
+            related = "\n".join(f"- {path}" for path in fix_context.related_files)
+            blocks.append(f"RELATED_FILES:\n{related}")
+        if fix_context.code_rag_results:
+            blocks.append(self._format_rag_section("CODE_RAG", fix_context.code_rag_results))
+        if fix_context.docs_rag_results:
+            blocks.append(self._format_rag_section("DOCS_RAG", fix_context.docs_rag_results))
+        return "\n\n".join(blocks)
+
+    @staticmethod
+    def _format_rag_section(label: str, items: List[dict]) -> str:
+        lines = [f"{label}:"]
+        for item in items:
+            meta = item.get("metadata", {}) or {}
+            header = meta.get("title") or meta.get("file_path", "context")
+            start = meta.get("start_line")
+            end = meta.get("end_line")
+            if start is not None and end is not None:
+                header = f"{header}:{start}-{end}"
+            lines.append(f"{header}\n{item.get('content', '')}")
+        return "\n".join(lines)
+
+    @staticmethod
+    def _issue_key(issue: BugIssue) -> str:
+        return f"{issue.location.file}:{issue.location.line}:{issue.type}"
+
+    @staticmethod
+    def _extract_verification_method(output: str) -> str:
+        for line in output.splitlines():
+            if line.startswith("Verification Method:"):
+                return line.split(":", 1)[1].strip() or "unknown"
+        return "unknown"
 
     def _init_run_dir(self) -> str:
         run_id = uuid.uuid4().hex
@@ -294,154 +403,7 @@ INSTRUCTIONS:
         return "\n\n".join(blocks), steps
 
     def solve_issue(self, issue: BugIssue, diff_text: Optional[str] = None) -> bool:
-        print(f"\n[Agent] Starting to fix: {issue.description}")
-        print(f"[Agent] File: {issue.location.file}, Line: {issue.location.line}")
-
-        state = AgentState.VALIDATE_ISSUE
-        run_dir = self._init_run_dir()
-        self._write_run_file(
-            run_dir, "issue.json", json.dumps(issue.model_dump(), indent=2)
-        )
-
-        is_valid, reason = self._validate_issue(issue)
-        if not is_valid:
-            print(f"[Agent] Issue is not actionable: {reason}")
-            self._write_run_file(run_dir, "final_state.txt", state.value)
-            return False
-
-        last_error: Optional[str] = None
-        last_fix: Optional[str] = None
-
-        for attempt in range(1, MAX_FIX_RETRIES + 1):
-            state = AgentState.BUILD_CONTEXT
-            print(f"\n[Agent] Attempt {attempt}/{MAX_FIX_RETRIES}")
-            print("[Agent] Generating fix...")
-            file_context = self._read_file_context(
-                issue.location.file, issue.location.line, context_lines=15
-            )
-            extra_context, steps = self._build_tool_context(issue, last_error)
-            if steps:
-                print(f"[Agent] Tool steps: {', '.join(steps)}")
-            context_text = "\n\n".join(
-                part
-                for part in [
-                    f"STEPS: {', '.join(steps)}" if steps else "",
-                    f"FILE_CONTEXT:\n{file_context}" if file_context else "",
-                    extra_context,
-                ]
-                if part
-            )
-            if attempt == 1:
-                self._write_run_file(run_dir, "context.txt", context_text)
-            self._write_run_file(run_dir, f"attempt_{attempt}_context.txt", context_text)
-
-            state = AgentState.GENERATE_FIX
-            prompt, raw_fix = self._generate_fix(
-                issue, file_context, last_error, extra_context
-            )
-            self._write_run_file(run_dir, f"attempt_{attempt}_prompt.txt", prompt)
-            self._write_run_file(run_dir, f"attempt_{attempt}_raw_llm.txt", raw_fix)
-            if not raw_fix:
-                print("[Agent] Failed to generate fix")
-                self._write_run_file(
-                    run_dir,
-                    f"attempt_{attempt}_payload.json",
-                    json.dumps({"error": "Empty LLM response"}, indent=2),
-                )
-                continue
-
-            payload = self._parse_fix_payload(raw_fix)
-            state = AgentState.VALIDATE_FIX
-            is_valid, reason, normalized = self._validate_fix_payload(
-                issue, payload, diff_text=diff_text
-            )
-            if not is_valid:
-                last_error = reason
-                print(f"[Agent] Invalid fix payload: {reason}")
-                self._write_run_file(
-                    run_dir,
-                    f"attempt_{attempt}_payload.json",
-                    json.dumps({"error": reason, "raw": payload}, indent=2),
-                )
-                continue
-
-            self._write_run_file(
-                run_dir,
-                f"attempt_{attempt}_payload.json",
-                json.dumps(normalized, indent=2),
-            )
-
-            fix_format = normalized.get("format")
-            is_patch = fix_format == "patch"
-            if is_patch:
-                current_fix = normalized.get("patch", "")
-            else:
-                current_fix = normalized.get("replacement", "")
-
-            if not current_fix:
-                print("[Agent] Empty fix output, retrying")
-                last_error = "Empty fix output"
-                continue
-
-            if last_fix and current_fix == last_fix:
-                print("[Agent] Fix repeated with no changes, stopping early")
-                return False
-
-            start_line = normalized.get("start_line") if not is_patch else None
-            end_line = normalized.get("end_line") if not is_patch else None
-
-            if not is_patch and start_line:
-                existing = self._read_line_range(
-                    issue.location.file, start_line, end_line or start_line
-                )
-                if existing.strip() == current_fix.strip():
-                    print("[Agent] Proposed fix is a no-op")
-                    last_error = "No-op fix"
-                    continue
-
-            pre_content = "".join(self._read_file_lines(issue.location.file))
-            state = AgentState.APPLY_FIX
-            success, touched_files = self.fixer.apply_fix_with_transaction(
-                issue,
-                current_fix,
-                start_line=start_line,
-                end_line=end_line,
-                is_patch=is_patch,
-            )
-            if not success:
-                last_error = self.fixer.get_last_error()
-                print(f"[Agent] Could not apply fix: {last_error}")
-                continue
-
-            post_content = "".join(self._read_file_lines(issue.location.file))
-            if pre_content == post_content:
-                last_error = "Fix applied but file did not change"
-                print(f"[Agent] {last_error}")
-                state = AgentState.ROLLBACK
-                self.fixer.rollback_files(touched_files)
-                continue
-
-            state = AgentState.VERIFY
-            verified, output = self.fixer.run_verification_with_output()
-            self._write_run_file(
-                run_dir, f"attempt_{attempt}_verification.txt", output
-            )
-            if verified:
-                print("[Agent] Fix applied and verified successfully!")
-                state = AgentState.SUCCESS
-                self._write_run_file(run_dir, "final_state.txt", state.value)
-                return True
-
-            last_error = output
-            last_fix = current_fix
-            state = AgentState.ROLLBACK
-            self.fixer.rollback_files(touched_files)
-            print("[Agent] Fix failed verification, rolling back...")
-
-        print("[Agent] All fix attempts exhausted.")
-        state = AgentState.FAIL
-        self._write_run_file(run_dir, "final_state.txt", state.value)
-        return False
+        return FixLoopRunner(self).run(issue, diff_text=diff_text)
 
 
 if __name__ == "__main__":

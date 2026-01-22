@@ -3,6 +3,7 @@ python-dotenv
 GitPython
 numpy
 openai
+google-genai
 rank_bm25
 matplotlib
 seaborn

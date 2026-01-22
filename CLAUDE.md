@@ -45,7 +45,7 @@ Multi-LLM Agentic Code Reviewer using Dual-RAG (codebase + docs) to analyze git 
 ```bash
 # Setup
 pip install -r requirements.txt
-cp .env.example .env  # Add OPENROUTER_API_KEY
+cp .env.example .env  # Add GEMINI_API_KEY (+ OPENAI_API_KEY if using OpenAI embeddings)
 
 # Index codebase for RAG
 python main.py index .

@@ -38,12 +38,15 @@ python main.py fix <issue_id>
 ## Operations
 
 ### Environment Variables
-- `OPENROUTER_API_KEY`: required for LLM calls
+- `GEMINI_API_KEY`: required for LLM calls
 - `OPENAI_API_KEY`: required for OpenAI embeddings (no torch)
-- `OPENROUTER_TIMEOUT`: request timeout in seconds (default 60)
+- `OPENAI_TIMEOUT`: request timeout in seconds (default 60)
+- `LLM_PROVIDER`: `gemini` (default) or `openai`
+- `GEMINI_MODEL`: Gemini model name (default `gemini-2.0-flash`)
+- `LLM_MIN_DELAY`: minimum delay between LLM requests in seconds
 - `EMBEDDING_MODE`: `openai` or `local`
 
 ### Troubleshooting
 - "Collection does not exist": run `python main.py index` and `python main.py index-docs`
-- Slow graders: increase `OPENROUTER_TIMEOUT`
+- Slow graders: increase `OPENAI_TIMEOUT` and `LLM_MIN_DELAY`
 - Missing issues: verify diff is non-empty and a query is provided

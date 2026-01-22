@@ -3,11 +3,8 @@ project:
   max_context_tokens: 6000
 
 models:
-  - name: "gemini"
-    provider: "google"
-    enabled: true
-  - name: "openrouter-free"
-    provider: "openrouter"
+  - name: "gemini-free"
+    provider: "gemini"
     enabled: true
 
 rag:

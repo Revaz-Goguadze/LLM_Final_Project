@@ -23,4 +23,4 @@
 - Run `python main.py index-docs --path docs`
 - Run `python main.py analyze --unstaged --query "review changes for security, logic, and performance issues"`
 - Verify `bug_report.json` and `bug_report.md` are generated
-- Ensure `.env` is set with `OPENROUTER_API_KEY`
+- Ensure `.env` is set with `GEMINI_API_KEY` (LLM calls) and `OPENAI_API_KEY` if using OpenAI embeddings

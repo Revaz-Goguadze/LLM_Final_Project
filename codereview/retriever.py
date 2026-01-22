@@ -6,19 +6,46 @@ from .config import (
     BM25_TOP_K,
     HYBRID_ALPHA,
     BM25_INDEX_PATH,
-    OPENROUTER_API_KEY,
+    OPENAI_API_KEY,
+    GEMINI_API_KEY,
+    LLM_PROVIDER,
+    GEMINI_MODEL,
+    OPENAI_TIMEOUT,
+    MODEL_HYDE,
+    LLM_MIN_DELAY,
 )
+from .llm_utils import RateLimiter, backoff_sleep
+from .gemini_client import GeminiClient
 from .embeddings import get_embedding_function, collection_name, bm25_path
 from .chroma_client import get_chroma_client
 
 
 class HyDEGenerator:
     def __init__(self):
-        self.client = OpenAI(
-            base_url="https://openrouter.ai/api/v1",
-            api_key=OPENROUTER_API_KEY,
-        )
-        self.model = "mistralai/devstral-2512:free"
+        self.provider = LLM_PROVIDER
+        self.rate_limiter = RateLimiter(LLM_MIN_DELAY)
+        if self.provider == "gemini":
+            if not GEMINI_API_KEY:
+                self.client = None
+                self.model = None
+            else:
+                self.client = GeminiClient(
+                    api_key=GEMINI_API_KEY,
+                    model=GEMINI_MODEL,
+                    min_delay=LLM_MIN_DELAY,
+                    max_retries=3,
+                )
+                self.model = GEMINI_MODEL
+        else:
+            if not OPENAI_API_KEY:
+                self.client = None
+                self.model = None
+            else:
+                self.client = OpenAI(
+                    api_key=OPENAI_API_KEY,
+                    timeout=OPENAI_TIMEOUT,
+                )
+                self.model = MODEL_HYDE
 
     def generate_hypothetical_doc(self, query: str) -> str:
         prompt = f"""Given this code review query, generate a hypothetical code snippet that would be relevant.
@@ -27,17 +54,27 @@ Query: {query}
 Generate a short Python code example (10-20 lines) that would answer this query.
 Only output the code, no explanations."""
 
-        try:
-            response = self.client.chat.completions.create(
-                model=self.model,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=300,
-            )
-            if response.choices and response.choices[0].message:
-                return response.choices[0].message.content or query
+        if not self.client or not self.model:
             return query
-        except Exception:
-            return query
+
+        for attempt in range(3):
+            try:
+                self.rate_limiter.wait()
+                if self.provider == "gemini":
+                    return self.client.generate(prompt) or query
+                response = self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[{"role": "user", "content": prompt}],
+                    max_tokens=300,
+                    timeout=OPENAI_TIMEOUT,
+                )
+                if response.choices and response.choices[0].message:
+                    return response.choices[0].message.content or query
+                return query
+            except Exception:
+                backoff_sleep(attempt)
+                continue
+        return query
 
 
 class HybridRetriever:
@@ -54,7 +91,7 @@ class HybridRetriever:
         )
         self.bm25 = BM25Index(path=bm25_path(bm25_index_path))
         self.bm25.load_or_build(self.collection)
-        self.hyde = HyDEGenerator() if OPENROUTER_API_KEY else None
+        self.hyde = HyDEGenerator()
 
     def _semantic_search(self, query: str, n_results: int):
         try:

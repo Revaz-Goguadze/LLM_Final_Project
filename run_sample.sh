@@ -9,10 +9,11 @@ if [[ ! -d ".venv" ]]; then
   .venv/bin/pip install -r requirements.txt
 fi
 
-: "${OPENROUTER_TIMEOUT:=45}"
+: "${OPENAI_TIMEOUT:=45}"
 
 rm -rf .vector_store .bm25
 
 .venv/bin/python main.py index --path sample
 .venv/bin/python main.py index-docs --path docs
 .venv/bin/python main.py analyze --path sample --query "review sample code for security, logic, and performance issues"
+.venv/bin/python main.py fix 0

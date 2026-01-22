@@ -8,6 +8,40 @@ from .diff_utils import parse_changed_lines
 
 class ReportGenerator:
     @staticmethod
+    def enrich_report(report: FinalReport) -> FinalReport:
+        if not report.consolidated_issues:
+            return report
+
+        file_cache: Dict[str, list[str]] = {}
+        for issue in report.consolidated_issues:
+            if not issue.location or not issue.location.file:
+                continue
+
+            file_path = issue.location.file
+            if not os.path.exists(file_path):
+                continue
+
+            if file_path not in file_cache:
+                try:
+                    with open(file_path, "r", encoding="utf-8") as f:
+                        file_cache[file_path] = f.readlines()
+                except Exception:
+                    file_cache[file_path] = []
+
+            line_no = issue.location.line
+            if line_no and line_no > 0:
+                if issue.start_line is None:
+                    issue.start_line = line_no
+                if issue.end_line is None:
+                    issue.end_line = issue.start_line
+                if issue.line_text is None:
+                    lines = file_cache.get(file_path, [])
+                    if line_no <= len(lines):
+                        issue.line_text = lines[line_no - 1].rstrip("\n")
+
+        return report
+
+    @staticmethod
     def _parse_changed_lines(diff_text: str) -> Dict[str, Set[int]]:
         return parse_changed_lines(diff_text)
 
@@ -89,6 +123,10 @@ class ReportGenerator:
                 severity_emoji = {"critical": "🔴", "high": "🟠", "medium": "🟡", "low": "🟢"}.get(issue.severity.lower(), "⚪")
                 md += f"### {severity_emoji} {issue.type.upper()}: {issue.severity}\n"
                 md += f"- **Location**: `{issue.location.file}` (Function: `{issue.location.function}`, Line: {issue.location.line})\n"
+                if issue.start_line and issue.end_line:
+                    md += f"- **Line Range**: {issue.start_line}-{issue.end_line}\n"
+                if issue.line_text:
+                    md += f"- **Line Text**: `{issue.line_text}`\n"
                 md += f"- **Description**: {issue.description}\n"
                 md += f"- **Evidence**: `{issue.evidence}`\n"
                 md += f"- **Suggested Fix**: {issue.suggested_fix}\n\n"
@@ -97,6 +135,9 @@ class ReportGenerator:
 
     @staticmethod
     def save_report(report, path: str):
+        if isinstance(report, FinalReport):
+            report = ReportGenerator.enrich_report(report)
+
         if hasattr(report, "model_dump"):
             payload = report.model_dump()
         else:

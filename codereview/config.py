@@ -4,38 +4,43 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # API Keys
-OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 
-# Models - Gemini via OpenRouter (free tier)
-MODEL_GRADER_SECURITY = "mistralai/devstral-2512:free"
-MODEL_GRADER_LOGIC = "mistralai/devstral-2512:free"
-MODEL_GRADER_PERF = "mistralai/devstral-2512:free"
-MODEL_JUDGE = "mistralai/devstral-2512:free"
+# LLM Provider
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
+
+# Models - LLMs
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+DEFAULT_LLM_MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else "gpt-4o-mini"
+MODEL_GRADER_SECURITY = os.getenv("MODEL_GRADER_SECURITY", DEFAULT_LLM_MODEL)
+MODEL_GRADER_LOGIC = os.getenv("MODEL_GRADER_LOGIC", DEFAULT_LLM_MODEL)
+MODEL_GRADER_PERF = os.getenv("MODEL_GRADER_PERF", DEFAULT_LLM_MODEL)
+MODEL_JUDGE = os.getenv("MODEL_JUDGE", DEFAULT_LLM_MODEL)
+MODEL_HYDE = os.getenv("MODEL_HYDE", DEFAULT_LLM_MODEL)
 
 # Model diversity options (fallback lists for each role)
 MODEL_GRADER_SECURITY_OPTIONS = [
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
+    MODEL_GRADER_SECURITY,
+    MODEL_GRADER_SECURITY,
+    MODEL_GRADER_SECURITY,
 ]
 
 MODEL_GRADER_LOGIC_OPTIONS = [
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
+    MODEL_GRADER_LOGIC,
+    MODEL_GRADER_LOGIC,
+    MODEL_GRADER_LOGIC,
 ]
 
 MODEL_GRADER_PERF_OPTIONS = [
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
+    MODEL_GRADER_PERF,
+    MODEL_GRADER_PERF,
+    MODEL_GRADER_PERF,
 ]
 
 MODEL_JUDGE_OPTIONS = [
-    "mistralai/devstral-2512:free",
-    "mistralai/devstral-2512:free",
+    MODEL_JUDGE,
+    MODEL_JUDGE,
 ]
 
 # Deduplication settings
@@ -60,19 +65,27 @@ CONTEXT_WINDOW_REDUCTION_SUMMARY = True
 VERIFY_COMMAND = os.getenv("VERIFY_COMMAND", "pytest")
 EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "openai")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENROUTER_TIMEOUT = float(os.getenv("OPENROUTER_TIMEOUT", "60"))
+OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
+LLM_MIN_DELAY = float(os.getenv("LLM_MIN_DELAY", "1.2"))
+LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 ALLOW_FIX_PATCH = os.getenv("ALLOW_FIX_PATCH", "false").lower() in ("1", "true", "yes")
 
 
 def missing_api_keys() -> list[str]:
     missing = []
-    if not OPENROUTER_API_KEY:
-        missing.append("OPENROUTER_API_KEY")
-    if not GEMINI_API_KEY:
-        missing.append("GEMINI_API_KEY")
+    if LLM_PROVIDER == "gemini":
+        if not GEMINI_API_KEY:
+            missing.append("GEMINI_API_KEY")
+    else:
+        if not OPENAI_API_KEY:
+            missing.append("OPENAI_API_KEY")
     return missing
 
 
-def require_openrouter_key() -> None:
-    if not OPENROUTER_API_KEY:
-        raise ValueError("OPENROUTER_API_KEY is required for OpenRouter requests.")
+def require_llm_key() -> None:
+    if LLM_PROVIDER == "gemini":
+        if not GEMINI_API_KEY:
+            raise ValueError("GEMINI_API_KEY is required for Gemini requests.")
+    else:
+        if not OPENAI_API_KEY:
+            raise ValueError("OPENAI_API_KEY is required for OpenAI requests.")

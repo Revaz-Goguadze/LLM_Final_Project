@@ -5,34 +5,47 @@ from collections import defaultdict
 from openai import OpenAI
 from .models import GraderReport, FinalReport, BugIssue
 from .config import (
-    OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE, OPENROUTER_TIMEOUT,
-    MODEL_GRADER_SECURITY_OPTIONS, MODEL_GRADER_LOGIC_OPTIONS,
-    MODEL_GRADER_PERF_OPTIONS, ENABLE_DEDUPLICATION, DEDUPLICATION_LINE_THRESHOLD,
+    OPENAI_API_KEY,
+    GEMINI_API_KEY,
+    LLM_PROVIDER,
+    MODEL_JUDGE,
+    GEMINI_MODEL,
+    DEFAULT_LLM_MODEL,
+    OPENAI_TIMEOUT,
+    LLM_MIN_DELAY,
+    LLM_MAX_RETRIES,
+    MODEL_GRADER_SECURITY_OPTIONS,
+    MODEL_GRADER_LOGIC_OPTIONS,
+    MODEL_GRADER_PERF_OPTIONS,
+    ENABLE_DEDUPLICATION,
+    DEDUPLICATION_LINE_THRESHOLD,
 )
-
-USE_OPENROUTER = bool(OPENROUTER_API_KEY)
+from .llm_utils import RateLimiter, backoff_sleep
+from .gemini_client import GeminiClient
 
 
 class MultiLLMGrader:
-    def __init__(self, model_name: str = "google/gemini-2.0-flash-exp:free"):
-        if USE_OPENROUTER:
+    def __init__(self, model_name: str = DEFAULT_LLM_MODEL):
+        self.rate_limiter = RateLimiter(LLM_MIN_DELAY)
+        self.model_name = model_name
+        self.provider = LLM_PROVIDER
+        if LLM_PROVIDER == "gemini":
+            if not GEMINI_API_KEY:
+                raise ValueError("GEMINI_API_KEY is required for grading.")
+            self.client = GeminiClient(
+                api_key=GEMINI_API_KEY,
+                model=GEMINI_MODEL,
+                min_delay=LLM_MIN_DELAY,
+                max_retries=LLM_MAX_RETRIES,
+            )
+        else:
+            if not OPENAI_API_KEY:
+                raise ValueError("OPENAI_API_KEY is required for grading.")
             self.client = OpenAI(
-                base_url="https://openrouter.ai/api/v1",
-                api_key=OPENROUTER_API_KEY,
-                timeout=OPENROUTER_TIMEOUT,
+                api_key=OPENAI_API_KEY,
+                timeout=OPENAI_TIMEOUT,
                 max_retries=2,
             )
-            self.model_name = model_name
-        else:
-            if not GEMINI_API_KEY:
-                raise ValueError(
-                    "GEMINI_API_KEY is required when OPENROUTER_API_KEY is not set."
-                )
-            import google.generativeai as genai
-
-            genai.configure(api_key=GEMINI_API_KEY)
-            self.model = genai.GenerativeModel("gemini-2.0-flash")
-            self.model_name = "gemini-2.0-flash"
 
     def _select_model_for_role(self, role: str, attempt: int = 0) -> str:
         """Select model for grading role with fallback cycling."""
@@ -229,19 +242,19 @@ Code to analyze:
         try:
             content = ""
             data = None
-            for attempt in range(2):
-                if USE_OPENROUTER:
+            for attempt in range(LLM_MAX_RETRIES):
+                self.rate_limiter.wait()
+                if self.provider == "gemini":
+                    content = self.client.generate(prompt)
+                else:
                     response = self.client.chat.completions.create(
                         model=model_id,
                         messages=[{"role": "user", "content": prompt}],
-                        timeout=OPENROUTER_TIMEOUT,
+                        timeout=OPENAI_TIMEOUT,
                     )
                     if not response.choices or not response.choices[0].message:
                         raise ValueError("No response choices returned")
                     content = response.choices[0].message.content
-                else:
-                    response = self.model.generate_content(prompt)
-                    content = response.text
 
                 print(
                     f"[DEBUG] Raw response for {role}: {content[:200] if content else 'EMPTY'}..."
@@ -253,8 +266,9 @@ Code to analyze:
                 try:
                     data = self._safe_json_loads(content)
                     break
-                except ValueError:
-                    if attempt == 0 and USE_OPENROUTER:
+                except ValueError as e:
+                    if attempt < LLM_MAX_RETRIES - 1:
+                        backoff_sleep(attempt)
                         continue
                     raise
 
@@ -293,18 +307,23 @@ Code to analyze:
         )
 
         try:
-            if USE_OPENROUTER:
-                response = self.client.chat.completions.create(
-                    model=MODEL_JUDGE,
-                    messages=[{"role": "user", "content": prompt}],
-                    timeout=OPENROUTER_TIMEOUT,
-                )
-                if not response.choices or not response.choices[0].message:
-                    raise ValueError("No response choices returned")
-                content = response.choices[0].message.content
-            else:
-                response = self.model.generate_content(prompt)
-                content = response.text
+            content = ""
+            for attempt in range(LLM_MAX_RETRIES):
+                self.rate_limiter.wait()
+                if self.provider == "gemini":
+                    content = self.client.generate(prompt)
+                else:
+                    response = self.client.chat.completions.create(
+                        model=MODEL_JUDGE,
+                        messages=[{"role": "user", "content": prompt}],
+                        timeout=OPENAI_TIMEOUT,
+                    )
+                    if not response.choices or not response.choices[0].message:
+                        raise ValueError("No response choices returned")
+                    content = response.choices[0].message.content
+                if content:
+                    break
+                backoff_sleep(attempt)
 
             if not content:
                 raise ValueError("Empty response from model")

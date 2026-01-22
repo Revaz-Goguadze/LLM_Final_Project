@@ -15,6 +15,9 @@ class BugIssue(BaseModel):
     evidence: str
     suggested_fix: str
     confidence: float
+    start_line: Optional[int] = None
+    end_line: Optional[int] = None
+    line_text: Optional[str] = None
 
 class BestPracticeViolation(BaseModel):
     rule: str

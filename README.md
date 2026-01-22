@@ -23,7 +23,7 @@ pip install -r requirements.txt
 
 Create `.env` file:
 ```
-OPENROUTER_API_KEY=your_openrouter_key_here
+GEMINI_API_KEY=your_gemini_key_here
 ```
 
 ### 3. Index codebase for RAG
