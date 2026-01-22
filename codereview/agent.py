@@ -67,10 +67,13 @@ class ReActAgent:
                 client_kwargs["base_url"] = OPENAI_BASE_URL
             self.client = OpenAI(**client_kwargs)
         self.retriever = HybridRetriever()
-        self.docs_retriever = HybridRetriever(
-            collection=DOCS_DB_COLLECTION,
-            bm25_index_path=DOCS_BM25_INDEX_PATH,
-        )
+        try:
+            self.docs_retriever = HybridRetriever(
+                collection=DOCS_DB_COLLECTION,
+                bm25_index_path=DOCS_BM25_INDEX_PATH,
+            )
+        except (ValueError, EOFError):
+            self.docs_retriever = None
         self.fixer = CodeFixer()
         self.fix_context_builder = FixContextBuilder(
             self.retriever, self.docs_retriever
@@ -204,7 +207,9 @@ class ReActAgent:
             return True, "", {"format": "patch", "patch": patch_text}
 
         replacement = str(payload.get("replacement", "")).strip()
-        if not replacement:
+        # Allow empty replacement for line removal (deletion)
+        # But replacement key must be present in payload
+        if "replacement" not in payload:
             return False, "Missing replacement content", {}
 
         start_line = payload.get("start_line") or issue.start_line or issue.location.line
@@ -293,7 +298,7 @@ INSTRUCTIONS:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
+                    max_tokens=32768,  # 32K for GLM-4.7 reasoning mode
                     timeout=OPENAI_TIMEOUT,
                 )
                 if response.choices and response.choices[0].message:
