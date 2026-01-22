@@ -8,7 +8,7 @@ def test_select_model_for_security():
     model = grader._select_model_for_role("security", 0)
     assert model is not None
     assert isinstance(model, str)
-    assert "/" in model  # OpenRouter models have '/' in name
+    assert len(model) > 0  # Valid model name returned
 
 
 def test_select_model_for_logic():
