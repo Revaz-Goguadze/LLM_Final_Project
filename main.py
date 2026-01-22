@@ -291,18 +291,69 @@ def evaluate(
     use_docs_rag: bool = typer.Option(True, "--use-docs-rag/--no-use-docs-rag"),
     top_k: int = typer.Option(6, "--top-k"),
     docs_top_k: int = typer.Option(4, "--docs-top-k"),
+    mode: str = typer.Option("both", "--mode", help="Evaluation mode: 'single', 'multi', or 'both'"),
 ):
-    """Run evaluation on a labeled dataset."""
-    from codereview.evaluator import EvaluationRunner
+    """Run evaluation on a labeled dataset.
+
+    Modes:
+    - single: Logic grader only (baseline)
+    - multi: All graders + judge (full pipeline)
+    - both: Run both and compute improvement metric
+    """
+    from codereview.evaluator import EvaluationRunner, compute_multi_llm_improvement
     from codereview.eval_plots import generate_plots
-    runner = EvaluationRunner(
-        use_rag=use_rag, use_docs_rag=use_docs_rag, top_k=top_k, docs_top_k=docs_top_k
-    )
-    results = runner.run(dataset_path)
     os.makedirs("evaluation", exist_ok=True)
+
+    single_results = None
+    multi_results = None
+
+    # Run single mode if requested
+    if mode in ("single", "both"):
+        print("[yellow]Running single-model baseline evaluation...[/yellow]")
+        single_runner = EvaluationRunner(
+            use_rag=use_rag, use_docs_rag=use_docs_rag, top_k=top_k, docs_top_k=docs_top_k, mode="single"
+        )
+        single_results = single_runner.run(dataset_path)
+        with open("evaluation/results_summary_single.json", "w", encoding="utf-8") as f:
+            json.dump(single_results, f, indent=2)
+        print(f"[cyan]Single mode - F1: {single_results['f1']:.2f}, Precision: {single_results['precision']:.2f}, Recall: {single_results['recall']:.2f}[/cyan]")
+
+    # Run multi mode if requested
+    if mode in ("multi", "both"):
+        print("[yellow]Running multi-model evaluation...[/yellow]")
+        multi_runner = EvaluationRunner(
+            use_rag=use_rag, use_docs_rag=use_docs_rag, top_k=top_k, docs_top_k=docs_top_k, mode="multi"
+        )
+        multi_results = multi_runner.run(dataset_path)
+        with open("evaluation/results_summary_multi.json", "w", encoding="utf-8") as f:
+            json.dump(multi_results, f, indent=2)
+        generate_plots(multi_results, "evaluation/plots")
+        print(f"[cyan]Multi mode - F1: {multi_results['f1']:.2f}, Precision: {multi_results['precision']:.2f}, Recall: {multi_results['recall']:.2f}[/cyan]")
+
+    # Compute improvement if both modes were run
+    if mode == "both" and single_results and multi_results:
+        improvement = compute_multi_llm_improvement(single_results, multi_results)
+        with open("evaluation/improvement.json", "w", encoding="utf-8") as f:
+            json.dump(improvement, f, indent=2)
+
+        print("\n[bold green]=== Multi-LLM Improvement vs Single Baseline ===[/bold green]")
+        print(f"F1 Improvement: {improvement['f1_improvement_pct']:+.1f}% (single: {improvement['single_f1']:.2f} -> multi: {improvement['multi_f1']:.2f})")
+        print(f"Precision Improvement: {improvement['precision_improvement_pct']:+.1f}%")
+        print(f"Recall Improvement: {improvement['recall_improvement_pct']:+.1f}%")
+        print(f"Fix Rate Improvement: {improvement['fix_rate_improvement_pct']:+.1f}%")
+
+        # Use multi results as primary summary
+        results = multi_results
+    elif single_results:
+        results = single_results
+    else:
+        results = multi_results
+
+    # Write legacy summary file for backward compatibility
     with open("evaluation/results_summary.json", "w", encoding="utf-8") as f:
         json.dump(
             {
+                "mode": mode,
                 "precision": results["precision"],
                 "recall": results["recall"],
                 "f1": results["f1"],
@@ -312,14 +363,15 @@ def evaluate(
             f,
             indent=2,
         )
+
     with open("evaluation/results_details.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
-    generate_plots(results, "evaluation/plots")
-    print("[bold green]Evaluation complete! Results saved to evaluation/results_summary.json[/bold green]")
-    print(f"Precision: {results['precision']:.2f}")
-    print(f"Recall: {results['recall']:.2f}")
-    print(f"F1: {results['f1']:.2f}")
-    print(f"Fix rate: {results['fix_rate']:.2f}")
+
+    print("\n[bold green]Evaluation complete! Results saved to evaluation/[/bold green]")
+    print(f"Final Precision: {results['precision']:.2f}")
+    print(f"Final Recall: {results['recall']:.2f}")
+    print(f"Final F1: {results['f1']:.2f}")
+    print(f"Final Fix rate: {results['fix_rate']:.2f}")
 
 if __name__ == "__main__":
     app()

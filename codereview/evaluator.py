@@ -14,6 +14,44 @@ from .config import (
 )
 
 
+def compute_multi_llm_improvement(single_results: Dict[str, Any], multi_results: Dict[str, Any]) -> Dict[str, float]:
+    """Compute multi-LLM improvement over single baseline.
+
+    Args:
+        single_results: Results from EvaluationRunner with mode="single"
+        multi_results: Results from EvaluationRunner with mode="multi"
+
+    Returns:
+        Dict with improvement percentages for precision, recall, f1, fix_rate
+    """
+    single_f1 = single_results.get("f1", 0.0)
+    multi_f1 = multi_results.get("f1", 0.0)
+
+    single_precision = single_results.get("precision", 0.0)
+    multi_precision = multi_results.get("precision", 0.0)
+
+    single_recall = single_results.get("recall", 0.0)
+    multi_recall = multi_results.get("recall", 0.0)
+
+    single_fix = single_results.get("fix_rate", 0.0)
+    multi_fix = multi_results.get("fix_rate", 0.0)
+
+    # Compute improvement as (multi - single) / single, avoid div by zero
+    def improvement(single: float, multi: float) -> float:
+        if single == 0:
+            return 0.0 if multi == 0 else 100.0
+        return ((multi - single) / single) * 100
+
+    return {
+        "f1_improvement_pct": improvement(single_f1, multi_f1),
+        "precision_improvement_pct": improvement(single_precision, multi_precision),
+        "recall_improvement_pct": improvement(single_recall, multi_recall),
+        "fix_rate_improvement_pct": improvement(single_fix, multi_fix),
+        "single_f1": single_f1,
+        "multi_f1": multi_f1,
+    }
+
+
 @dataclass
 class EvaluationCase:
     case_id: str
@@ -92,11 +130,13 @@ class EvaluationRunner:
         top_k: int = 6,
         docs_top_k: int = 4,
         use_docs_rag: bool = True,
+        mode: str = "multi",  # "multi" (all graders + judge) or "single" (logic only)
     ):
         self.use_rag = use_rag
         self.top_k = top_k
         self.docs_top_k = docs_top_k
         self.use_docs_rag = use_docs_rag
+        self.mode = mode
         self.grader = MultiLLMGrader()
 
     def _build_context(self, query: Optional[str], diff: str) -> Optional[str]:
@@ -139,12 +179,20 @@ class EvaluationRunner:
         for case in cases:
             rag_context = self._build_context(case.query, case.diff)
             analysis_input = build_analysis_input(case.query, case.diff, rag_context)
-            r1 = self.grader.grade_with_model("security", MODEL_GRADER_SECURITY, analysis_input)
-            r2 = self.grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
-            r3 = self.grader.grade_with_model("performance", MODEL_GRADER_PERF, analysis_input)
-            final = self.grader.judge([r1, r2, r3])
 
-            predicted = [i.model_dump() for i in final.consolidated_issues]
+            # Run in single mode (logic only) or multi mode (all graders + judge)
+            if self.mode == "single":
+                # Single model baseline: just logic grader, no judge
+                r2 = self.grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
+                predicted = [i.model_dump() for i in r2.issues]
+            else:
+                # Multi model: all graders + judge
+                r1 = self.grader.grade_with_model("security", MODEL_GRADER_SECURITY, analysis_input)
+                r2 = self.grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
+                r3 = self.grader.grade_with_model("performance", MODEL_GRADER_PERF, analysis_input)
+                final = self.grader.judge([r1, r2, r3])
+                predicted = [i.model_dump() for i in final.consolidated_issues]
+
             tp, fp, fn, fix_rate = _score_case(predicted, case.expected_issues)
             totals["tp"] += tp
             totals["fp"] += fp
@@ -152,15 +200,16 @@ class EvaluationRunner:
             totals["fix_rate_sum"] += fix_rate
             totals["cases"] += 1
 
-            # Per-model scoring
-            for key, report in (("security", r1), ("logic", r2), ("performance", r3)):
-                preds = [i.model_dump() for i in report.issues]
-                mtp, mfp, mfn, mfix = _score_case(preds, case.expected_issues)
-                per_model[key]["tp"] += mtp
-                per_model[key]["fp"] += mfp
-                per_model[key]["fn"] += mfn
-                per_model[key]["fix_rate_sum"] += mfix
-                per_model[key]["cases"] += 1
+            # Per-model scoring (only in multi mode)
+            if self.mode == "multi":
+                for key, report in (("security", r1), ("logic", r2), ("performance", r3)):
+                    preds = [i.model_dump() for i in report.issues]
+                    mtp, mfp, mfn, mfix = _score_case(preds, case.expected_issues)
+                    per_model[key]["tp"] += mtp
+                    per_model[key]["fp"] += mfp
+                    per_model[key]["fn"] += mfn
+                    per_model[key]["fix_rate_sum"] += mfix
+                    per_model[key]["cases"] += 1
 
             per_case.append(
                 {
@@ -195,12 +244,13 @@ class EvaluationRunner:
         f1 = (2 * precision * recall / (precision + recall)) if (precision + recall) else 0.0
 
         per_model_scores = {}
-        for key, stats in per_model.items():
-            p = stats["tp"] / (stats["tp"] + stats["fp"]) if (stats["tp"] + stats["fp"]) else 0.0
-            r = stats["tp"] / (stats["tp"] + stats["fn"]) if (stats["tp"] + stats["fn"]) else 0.0
-            f = stats["fix_rate_sum"] / stats["cases"] if stats["cases"] else 0.0
-            f1_score = (2 * p * r / (p + r)) if (p + r) else 0.0
-            per_model_scores[key] = {"precision": p, "recall": r, "f1": f1_score, "fix_rate": f, "totals": stats}
+        if self.mode == "multi":
+            for key, stats in per_model.items():
+                p = stats["tp"] / (stats["tp"] + stats["fp"]) if (stats["tp"] + stats["fp"]) else 0.0
+                r = stats["tp"] / (stats["tp"] + stats["fn"]) if (stats["tp"] + stats["fn"]) else 0.0
+                f = stats["fix_rate_sum"] / stats["cases"] if stats["cases"] else 0.0
+                f1_score = (2 * p * r / (p + r)) if (p + r) else 0.0
+                per_model_scores[key] = {"precision": p, "recall": r, "f1": f1_score, "fix_rate": f, "totals": stats}
 
         per_category_scores = {}
         for key, stats in per_category.items():
@@ -211,6 +261,7 @@ class EvaluationRunner:
             per_category_scores[key] = {"precision": p, "recall": r, "f1": f1_score, "fix_rate": f, "totals": stats}
 
         return {
+            "mode": self.mode,
             "precision": precision,
             "recall": recall,
             "f1": f1,

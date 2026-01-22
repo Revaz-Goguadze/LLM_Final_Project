@@ -88,7 +88,27 @@ class HybridRetriever:
             return {k: 1.0 for k in scores}
         return {k: (v - vmin) / (vmax - vmin) for k, v in scores.items()}
 
+    @staticmethod
+    def _rrf(ranked_lists, k: int = 60):
+        """Reciprocal Rank Fusion: combine multiple ranked lists.
+
+        Args:
+            ranked_lists: List of lists, where each inner list contains (doc_id, rank) tuples
+            k: Constant to prevent high ranks from dominating (default 60)
+
+        Returns:
+            Dict mapping doc_id to RRF score
+        """
+        scores = {}
+        for ranked_list in ranked_lists:
+            for rank, (doc_id, _) in enumerate(ranked_list, start=1):
+                if doc_id not in scores:
+                    scores[doc_id] = 0.0
+                scores[doc_id] += 1.0 / (k + rank)
+        return scores
+
     def search(self, query: str, n_results: int = 5):
+        # Get ranked results from BM25 and semantic search
         semantic = self._semantic_search(query, SEMANTIC_TOP_K)
         bm25 = self.bm25.search(query, BM25_TOP_K)
 
@@ -97,17 +117,28 @@ class HybridRetriever:
             hyde_doc = self.hyde.generate_hypothetical_doc(query)
             hyde_semantic = self._semantic_search(hyde_doc, SEMANTIC_TOP_K)
 
+        # Combine semantic + HyDE (keep best score for each doc)
         semantic_scores = {}
         for item in semantic + hyde_semantic:
             distance = item.get("distance", 0.0)
             sim = 1.0 / (1.0 + float(distance))
-            semantic_scores[item["id"]] = max(sim, semantic_scores.get(item["id"], 0.0))
+            doc_id = item["id"]
+            semantic_scores[doc_id] = max(sim, semantic_scores.get(doc_id, 0.0))
 
-        bm25_scores = {item["id"]: float(item["score"]) for item in bm25}
+        # Build ranked lists for RRF
+        # Format: [(doc_id, score), ...] sorted by score descending
+        semantic_ranked = sorted(
+            semantic_scores.items(), key=lambda x: x[1], reverse=True
+        )
+        bm25_ranked = sorted(
+            [(item["id"], float(item["score"])) for item in bm25],
+            key=lambda x: x[1], reverse=True
+        )
 
-        semantic_norm = self._normalize(semantic_scores)
-        bm25_norm = self._normalize(bm25_scores)
+        # Apply RRF fusion
+        rrf_scores = self._rrf([semantic_ranked, bm25_ranked])
 
+        # Build merged payload with RRF scores
         merged = {}
         for item in semantic + hyde_semantic:
             merged[item["id"]] = {
@@ -125,12 +156,10 @@ class HybridRetriever:
                     "distance": None,
                 }
 
+        # Apply RRF scores and sort
         combined = []
         for doc_id, payload in merged.items():
-            score = (HYBRID_ALPHA * semantic_norm.get(doc_id, 0.0)) + (
-                (1.0 - HYBRID_ALPHA) * bm25_norm.get(doc_id, 0.0)
-            )
-            payload["score"] = score
+            payload["score"] = rrf_scores.get(doc_id, 0.0)
             combined.append(payload)
 
         combined.sort(key=lambda x: x["score"], reverse=True)

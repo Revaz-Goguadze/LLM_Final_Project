@@ -1,5 +1,6 @@
 from codereview.models import BugIssue, CodeLocation, FinalReport, GraderReport, GitDiff
 import main
+from unittest.mock import patch
 
 
 class DummyAnalyzer:
@@ -54,6 +55,8 @@ class DummyGrader:
         )
 
 
+@patch("codereview.retriever.HybridRetriever", DummyRetriever)
+@patch("codereview.grader.MultiLLMGrader", DummyGrader)
 def test_analyze_writes_report(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     (tmp_path / "sample.py").write_text("print('b')\n", encoding="utf-8")
@@ -68,8 +71,6 @@ def test_analyze_writes_report(tmp_path, monkeypatch):
     )
 
     monkeypatch.setattr(main, "GitAnalyzer", lambda: DummyAnalyzer(diff_text))
-    monkeypatch.setattr(main, "HybridRetriever", DummyRetriever)
-    monkeypatch.setattr(main, "MultiLLMGrader", DummyGrader)
 
     main.analyze(
         unstaged=True,

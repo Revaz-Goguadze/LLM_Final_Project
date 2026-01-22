@@ -1,9 +1,14 @@
 import json
 import re
-from typing import Any, List
+from typing import Any, List, Dict
+from collections import defaultdict
 from openai import OpenAI
-from .models import GraderReport, FinalReport
-from .config import OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE, OPENROUTER_TIMEOUT
+from .models import GraderReport, FinalReport, BugIssue
+from .config import (
+    OPENROUTER_API_KEY, GEMINI_API_KEY, MODEL_JUDGE, OPENROUTER_TIMEOUT,
+    MODEL_GRADER_SECURITY_OPTIONS, MODEL_GRADER_LOGIC_OPTIONS,
+    MODEL_GRADER_PERF_OPTIONS, ENABLE_DEDUPLICATION, DEDUPLICATION_LINE_THRESHOLD,
+)
 
 USE_OPENROUTER = bool(OPENROUTER_API_KEY)
 
@@ -28,6 +33,91 @@ class MultiLLMGrader:
             genai.configure(api_key=GEMINI_API_KEY)
             self.model = genai.GenerativeModel("gemini-2.0-flash")
             self.model_name = "gemini-2.0-flash"
+
+    def _select_model_for_role(self, role: str, attempt: int = 0) -> str:
+        """Select model for grading role with fallback cycling."""
+        role_to_models = {
+            "security": MODEL_GRADER_SECURITY_OPTIONS,
+            "logic": MODEL_GRADER_LOGIC_OPTIONS,
+            "performance": MODEL_GRADER_PERF_OPTIONS,
+        }
+        models = role_to_models.get(role, MODEL_GRADER_LOGIC_OPTIONS)
+        return models[attempt % len(models)]
+
+    def _deduplicate_issues(self, issues: List[Any]) -> List[Any]:
+        """Remove duplicate issues by clustering location/type and selecting best.
+        Handles both Pydantic models (BugIssue) and dictionaries.
+        """
+        if not ENABLE_DEDUPLICATION:
+            return issues
+
+        def _to_dict(issue: Any) -> Dict[str, Any]:
+            """Convert BugIssue to dict if needed."""
+            if hasattr(issue, 'model_dump'):
+                return issue.model_dump()
+            elif isinstance(issue, dict):
+                return issue
+            else:
+                return {}
+
+        # Convert all to dicts for processing
+        issue_dicts = []
+        for issue in issues:
+            d = _to_dict(issue)
+            if d:
+                issue_dicts.append((issue, d))
+
+        # Group issues that are within threshold distance of each other
+        groups = []
+        threshold = DEDUPLICATION_LINE_THRESHOLD
+
+        for original, issue_dict in issue_dicts:
+            file_path = issue_dict.get("location", {}).get("file", "")
+            line = issue_dict.get("location", {}).get("line")
+            issue_type = issue_dict.get("type", "unknown")
+
+            # Find if this issue belongs to an existing group
+            matched_group = None
+            for group in groups:
+                for (_, g_dict) in group:
+                    g_file = g_dict.get("location", {}).get("file", "")
+                    g_line = g_dict.get("location", {}).get("line")
+                    g_type = g_dict.get("type", "unknown")
+
+                    # Same file and type, check line distance
+                    if (g_file == file_path and g_type == issue_type and
+                        line is not None and g_line is not None):
+                        if abs(line - g_line) <= threshold:
+                            matched_group = group
+                            break
+                if matched_group:
+                    break
+
+            if matched_group:
+                matched_group.append((original, issue_dict))
+            else:
+                groups.append([(original, issue_dict)])
+
+        # From each group, select the issue with highest confidence
+        deduped = []
+        for group in groups:
+            if len(group) == 1:
+                deduped.append(group[0][0])
+            else:
+                # Sort by confidence (descending), then severity
+                sorted_group = sorted(
+                    group,
+                    key=lambda item: (
+                        item[1].get("confidence", 0),
+                        {"critical": 4, "high": 3, "medium": 2, "low": 1}.get(
+                            item[1].get("severity", "low"), 0
+                        ),
+                    ),
+                    reverse=True,
+                )
+                deduped.append(sorted_group[0][0])
+
+        return deduped
 
     def _get_grading_prompt(self, role: str, code: str) -> str:
         base_instruction = """You are a precise code reviewer. You will receive code to analyze.
@@ -221,6 +311,10 @@ Code to analyze:
 
             data = self._safe_json_loads(content)
             data = self._coerce_final_payload(data)
+            # Apply deduplication to consolidated issues
+            consolidated_issues = data.get("consolidated_issues", [])
+            deduped_issues = self._deduplicate_issues(consolidated_issues)
+            data["consolidated_issues"] = deduped_issues
             return FinalReport(**data)
         except Exception as e:
             print(f"Error during final judgment: {e}")

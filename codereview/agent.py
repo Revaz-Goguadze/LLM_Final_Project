@@ -93,7 +93,18 @@ class ReActAgent:
 
         if issue.evidence and issue.evidence.strip():
             evidence = issue.evidence.strip()
-            if evidence not in "".join(lines):
+            file_content = "".join(lines)
+
+            # Try multiple evidence variants to handle diff formatting
+            evidence_variants = [
+                evidence,  # Original
+                re.sub(r'^[\+\-]\s*', '', evidence),  # Strip leading +/-
+                re.sub(r'^[\+\-]\s*', '', evidence, flags=re.MULTILINE),  # Strip from all lines
+                ' '.join(evidence.split()),  # Normalize whitespace
+            ]
+
+            found = any(variant in file_content for variant in evidence_variants)
+            if not found:
                 return False, "Evidence string not found in file"
 
         return True, ""

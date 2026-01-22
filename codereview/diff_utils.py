@@ -5,9 +5,17 @@ from typing import Dict, List, Set
 
 
 def parse_unified_diff_files(diff_text: str) -> List[str]:
+    """Parse unified diff to extract affected file paths.
+
+    Handles both:
+    - diff --git a/path b/path format (git diffs)
+    - +++ b/path format (unified diffs without git headers)
+    """
     files: List[str] = []
     seen = set()
+
     for line in diff_text.splitlines():
+        # Try diff --git format first
         if line.startswith("diff --git "):
             parts = line.split()
             if len(parts) >= 4:
@@ -17,6 +25,21 @@ def parse_unified_diff_files(diff_text: str) -> List[str]:
                 if b_path and b_path not in seen:
                     seen.add(b_path)
                     files.append(b_path)
+        # Also handle +++ b/path format (for diffs without git headers)
+        elif line.startswith("+++ b/"):
+            b_path = line[6:].strip()
+            if b_path and b_path not in seen:
+                seen.add(b_path)
+                files.append(b_path)
+        # Also handle --- a/path format as fallback
+        elif line.startswith("--- a/"):
+            a_path = line[6:].strip()
+            # Convert to b path equivalent
+            if a_path and a_path != "/dev/null":
+                if a_path not in seen:
+                    seen.add(a_path)
+                    files.append(a_path)
+
     return files
 
 

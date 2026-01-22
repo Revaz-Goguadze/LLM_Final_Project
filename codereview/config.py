@@ -14,6 +14,34 @@ MODEL_GRADER_LOGIC = "mistralai/devstral-2512:free"
 MODEL_GRADER_PERF = "mistralai/devstral-2512:free"
 MODEL_JUDGE = "mistralai/devstral-2512:free"
 
+# Model diversity options (fallback lists for each role)
+MODEL_GRADER_SECURITY_OPTIONS = [
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+]
+
+MODEL_GRADER_LOGIC_OPTIONS = [
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+]
+
+MODEL_GRADER_PERF_OPTIONS = [
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+]
+
+MODEL_JUDGE_OPTIONS = [
+    "mistralai/devstral-2512:free",
+    "mistralai/devstral-2512:free",
+]
+
+# Deduplication settings
+ENABLE_DEDUPLICATION = os.getenv("ENABLE_DEDUPLICATION", "true").lower() in ("1", "true", "yes")
+DEDUPLICATION_LINE_THRESHOLD = int(os.getenv("DEDUPLICATION_LINE_THRESHOLD", "3"))
+
 # Storage
 VECTOR_STORE_PATH = os.getenv("VECTOR_STORE_PATH", os.path.join(os.getcwd(), ".vector_store"))
 VECTOR_DB_COLLECTION = "codebase"

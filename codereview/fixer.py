@@ -211,16 +211,28 @@ class CodeFixer:
             self.last_error = f"File {file_path} not found"
             return False, []
 
-        touched_files: List[str] = []
-        if self._allow_patch and (is_patch or self._is_unified_diff(fix_content)):
-            touched_files = self._snapshot_files(
-                parse_unified_diff_files(fix_content) or [file_path]
-            )
-            applied = self._apply_patch(fix_content)
-            if not applied:
-                self.rollback_files(touched_files)
-            return applied, touched_files
+        # Determine which files will be touched by parsing patch content
+        # Explicit is_patch=True overrides ALLOW_FIX_PATCH config
+        is_explicit_patch = is_patch or self._is_unified_diff(fix_content)
 
+        if is_explicit_patch:
+            touched_files = parse_unified_diff_files(fix_content) or [file_path]
+            # Snapshot all affected files before applying
+            self._snapshot_files(touched_files)
+
+            # Apply patch if explicitly requested OR if allowed by config
+            # is_patch=True means caller explicitly wants patch application
+            should_apply = is_patch or self._allow_patch
+            if should_apply:
+                applied = self._apply_patch(fix_content)
+                if not applied:
+                    self.rollback_files(touched_files)
+                return applied, touched_files
+            else:
+                # Patch detected but not explicitly requested and not allowed by config
+                return False, touched_files
+
+        # Non-patch path
         touched_files = self._snapshot_files([file_path])
         if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
             return True, touched_files

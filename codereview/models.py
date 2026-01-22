@@ -1,5 +1,6 @@
-from typing import List, Optional, Dict
+from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
+from enum import Enum
 
 class CodeLocation(BaseModel):
     file: str
@@ -38,3 +39,49 @@ class GitDiff(BaseModel):
     unstaged: str
     last_commit: str
     changed_files: List[str]
+
+
+# Fix Loop Models
+
+class FixContext(BaseModel):
+    file_context: str = ""
+    code_rag_results: List[Dict[str, Any]] = Field(default_factory=list)
+    docs_rag_results: List[Dict[str, Any]] = Field(default_factory=list)
+    diff_context: Optional[str] = None
+    related_files: List[str] = Field(default_factory=list)
+    attempt: int = 1
+    previous_error: Optional[str] = None
+
+
+class VerificationResult(BaseModel):
+    success: bool
+    method: str = Field(..., description="pytest, syntax, import, semantic")
+    output: str = ""
+    diagnostics: List[str] = Field(default_factory=list)
+
+
+class ErrorCategory(str, Enum):
+    SYNTAX_ERROR = "syntax_error"
+    TEST_FAILURE = "test_failure"
+    CONTEXT_MISMATCH = "context_mismatch"
+    LOGIC_ERROR = "logic_error"
+    VERIFICATION_ERROR = "verification_error"
+    UNKNOWN = "unknown"
+
+
+class Remedy(BaseModel):
+    action: str = Field(..., description="expand_context, change_format, add_imports, etc.")
+    description: str
+    params: Dict[str, Any] = Field(default_factory=dict)
+
+
+class RetryStrategy(BaseModel):
+    expand_context: bool = True
+    change_format: bool = False
+    context_multiplier: float = 1.5
+    additional_instructions: str = ""
+
+
+class FixFormat(str, Enum):
+    PATCH = "patch"
+    REPLACE = "replace"

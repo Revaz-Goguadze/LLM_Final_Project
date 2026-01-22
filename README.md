@@ -1,70 +1,139 @@
 # LLM Code Review Platform
 
-This repository describes an MVP that uses multiple LLMs to evaluate code
-changes, detect bugs, and optionally suggest fixes. It combines:
+Multi-LLM Agentic Code Reviewer using Dual-RAG (codebase + docs) to analyze git diffs for security, logic, and performance issues.
 
-- Git diff + user query + indexed codebase context
-- Primary RAG (codebase retrieval)
-- Secondary RAG (framework docs + best practices)
-- Multi-model evaluation with metrics (precision, recall, fix rate)
-- Fix loop: GenerateFix -> ApplyFix -> Verify -> Retry/Stop
+## Architecture
 
-Start with the docs in `docs/README.md` for a structured map of the
-architecture, workflow, data schemas, and evaluation setup.
+- **Dual-RAG**: Primary RAG retrieves relevant code; Secondary RAG retrieves best practices
+- **Multi-LLM Ensemble**: Three specialized graders (security, logic, performance) + final judge
+- **RRF Hybrid Retrieval**: Reciprocal Rank Fusion combines semantic + BM25 + HyDE results
+- **ReAct Agent**: Issue validation and fix generation with verification loop
 
 ## Quick Start
-1) Install deps:
-`pip install -r /home/Zura/LLM_Final_Project/requirements.txt`
 
-2) Set API keys in `.env`:
-```
-OPENROUTER_API_KEY=your_openrouter_key
-OPENAI_API_KEY=your_openai_key
-```
+### 1. Install dependencies
 
-## One-Command Run (analyze current changes)
 ```bash
-MPLCONFIGDIR=/tmp OPENROUTER_TIMEOUT=45 python /home/Zura/LLM_Final_Project/main.py analyze --unstaged --query "review changes for security, logic, and performance issues"
-```
-
-## Analyze a Folder (no git diff)
-```bash
-MPLCONFIGDIR=/tmp OPENROUTER_TIMEOUT=45 python /home/Zura/LLM_Final_Project/main.py analyze --path sample --query "review sample code for security, logic, and performance issues"
-```
-
-## One-Command Script (sample run)
-```bash
-bash /home/Zura/LLM_Final_Project/run_sample.sh
-```
-
-## Full Run (index sample + analyze)
-```bash
-python /home/Zura/LLM_Final_Project/main.py index --path /home/Zura/LLM_Final_Project/sample
-python /home/Zura/LLM_Final_Project/main.py index-docs --path /home/Zura/LLM_Final_Project/docs
-python /home/Zura/LLM_Final_Project/main.py analyze --unstaged --query "review changes for security, logic, and performance issues"
-```
-
-## Embeddings (no torch)
-This project uses OpenAI embeddings by default. Set:
-```
-OPENAI_API_KEY=your_openai_key
-```
-
-## Arch Linux Setup
-```bash
-sudo pacman -S --needed python python-pip
 python -m venv .venv
-.venv/bin/pip install -r requirements.txt
+source .venv/bin/activate  # On Windows: .venv\Scripts\activate
+pip install -r requirements.txt
 ```
 
-3) Index codebase (builds vector + BM25 index):
-`python /home/Zura/LLM_Final_Project/main.py index --path /home/Zura/LLM_Final_Project`
+### 2. Set API keys
 
-4) Index docs for secondary RAG (Python best practices):
-`python /home/Zura/LLM_Final_Project/main.py index-docs --path /home/Zura/LLM_Final_Project/docs`
+Create `.env` file:
+```
+OPENROUTER_API_KEY=your_openrouter_key_here
+```
 
-5) Analyze with RAG context:
-`python /home/Zura/LLM_Final_Project/main.py analyze --unstaged --query "check for logic bugs"`
+### 3. Index codebase for RAG
 
-6) Evaluate on labeled dataset:
-`python /home/Zura/LLM_Final_Project/main.py evaluate --dataset /path/to/eval.jsonl`
+```bash
+# Index current project
+python main.py index .
+
+# Index specific folder
+python main.py index --path sample
+
+# Index docs for best practices RAG
+python main.py index-docs --path docs
+```
+
+### 4. Analyze changes
+
+```bash
+# Analyze unstaged changes
+python main.py analyze --unstaged
+
+# Analyze last commit
+python main.py analyze --last-commit
+
+# Analyze a folder without git
+python main.py analyze --path sample --query "review for security issues"
+```
+
+### 5. Fix issues
+
+```bash
+# List issues from last analysis
+python main.py list
+
+# Fix specific issue by ID
+python main.py fix <issue_id>
+```
+
+### 6. Evaluate
+
+```bash
+# Run evaluation with single/multi/both modes
+python main.py evaluate evaluation/dataset.jsonl --mode both
+
+# Modes: single (baseline), multi (full pipeline), both (with improvement metric)
+```
+
+## Demo Script
+
+Complete end-to-end demo:
+
+```bash
+# 1. Setup and index
+python main.py index .
+python main.py index-docs docs
+
+# 2. Make a sample change (with intentional bug)
+cat > sample/bad_code.py << 'EOF'
+def divide(a, b):
+    return a / b  # No zero division check
+
+result = divide(10, 0)
+print(result)
+EOF
+
+git add sample/bad_code.py
+
+# 3. Analyze changes
+python main.py analyze --staged --query "check for logic bugs"
+
+# 4. List and fix issues
+python main.py list
+python main.py fix 0  # Fix first issue
+
+# 5. Run evaluation
+python main.py evaluate evaluation/dataset.jsonl --mode both
+```
+
+## Project Structure
+
+```
+.
+├── main.py               # CLI entry (typer): index, index-docs, analyze, fix
+├── codereview/           # Core package: RAG, grading, agent
+├── evaluation/           # Ground truth samples + runner
+├── docs/                 # Best practices MD files indexed by DocsRAG
+├── tests/                # Integration and component tests
+├── sample/               # Sample code for testing
+├── .vector_store/        # ChromaDB persistent storage
+├── .bm25/                # BM25 lexical index
+└── config/               # YAML configuration files
+```
+
+## Configuration
+
+Edit `codereview/config.py` to customize:
+- LLM models for each grader role
+- RAG retrieval parameters (top_k, alpha)
+- Fix loop retry limits
+- Verification commands
+
+## Metrics
+
+The evaluation system tracks:
+- **Precision**: TP / (TP + FP)
+- **Recall**: TP / (TP + FN)
+- **F1 Score**: 2 * (precision * recall) / (precision + recall)
+- **Fix Rate**: Percentage of issues with valid fixes
+- **Multi-LLM Improvement**: (multi_f1 - single_f1) / single_f1
+
+## License
+
+MIT License - See LICENSE file for details
