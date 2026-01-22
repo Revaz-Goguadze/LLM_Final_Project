@@ -293,7 +293,7 @@ INSTRUCTIONS:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=300,
+                    max_tokens=4096,  # GLM-4.7 reasoning mode needs more tokens
                     timeout=OPENAI_TIMEOUT,
                 )
                 if response.choices and response.choices[0].message:
