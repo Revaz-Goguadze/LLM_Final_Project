@@ -11,7 +11,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 
 # Models - LLMs
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_LLM_MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else "gpt-4o-mini"
 MODEL_GRADER_SECURITY = os.getenv("MODEL_GRADER_SECURITY", DEFAULT_LLM_MODEL)
 MODEL_GRADER_LOGIC = os.getenv("MODEL_GRADER_LOGIC", DEFAULT_LLM_MODEL)
