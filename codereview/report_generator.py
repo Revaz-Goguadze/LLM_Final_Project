@@ -70,6 +70,7 @@ class ReportGenerator:
         changed_lines = ReportGenerator._parse_changed_lines(diff_text)
         diff_files = set(changed_lines.keys())
         file_cache: Dict[str, str] = {}
+        cwd = os.getcwd()
 
         filtered = []
         for issue in report.consolidated_issues:
@@ -80,27 +81,39 @@ class ReportGenerator:
                 continue
 
             file_path = issue.location.file if issue.location else None
-            if not file_path or not os.path.exists(file_path):
+            if not file_path:
                 continue
 
-            if diff_files and file_path not in diff_files:
+            abs_path = file_path
+            if not os.path.isabs(file_path):
+                abs_path = os.path.abspath(file_path)
+            if not os.path.exists(abs_path):
                 continue
 
-            if issue.location and issue.location.line and file_path in changed_lines:
-                if issue.location.line not in changed_lines[file_path]:
+            rel_path = os.path.relpath(abs_path, cwd)
+            if diff_files and rel_path not in diff_files and file_path not in diff_files:
+                continue
+
+            if issue.location and issue.location.line:
+                changed = changed_lines.get(rel_path) or changed_lines.get(file_path)
+                if changed and issue.location.line not in changed:
                     continue
 
-            if file_path not in file_cache:
+            if abs_path not in file_cache:
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
-                        file_cache[file_path] = f.read()
+                    with open(abs_path, "r", encoding="utf-8") as f:
+                        file_cache[abs_path] = f.read()
                 except Exception:
-                    file_cache[file_path] = ""
+                    file_cache[abs_path] = ""
 
             evidence = (issue.evidence or "").strip()
             if evidence:
-                evidence_variants = {evidence, evidence.lstrip("+-").strip()}
-                file_content = file_cache.get(file_path, "")
+                evidence_variants = {
+                    evidence,
+                    evidence.lstrip("+-").strip(),
+                    re.sub(r"^[Ll]?\d+:\s*", "", evidence).strip(),
+                }
+                file_content = file_cache.get(abs_path, "")
                 if not any(ev and ev in file_content for ev in evidence_variants):
                     if not any(ev and ev in diff_text for ev in evidence_variants):
                         continue

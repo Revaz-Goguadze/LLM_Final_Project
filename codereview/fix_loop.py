@@ -36,11 +36,21 @@ class FixLoopRunner:
         last_fix: Optional[str] = None
         error_history: List[str] = []
         issue_key = agent._issue_key(issue)
-        preferred_format = agent.fix_strategy_selector.recommend_format(
-            issue, diff_text
-        )
+        preferred_format = agent.fix_strategy_selector.recommend_format(issue, diff_text)
         enforce_format = False
-        if issue.start_line and issue.end_line:
+        desc_lower = (issue.description or "").lower()
+        force_patch = False
+        if issue.chunk_type == "class" and any(
+            token in desc_lower for token in ["missing", "not initialized", "unimplemented"]
+        ):
+            force_patch = True
+        if "missing method" in desc_lower or "missing methods" in desc_lower:
+            force_patch = True
+
+        if force_patch:
+            preferred_format = FixFormat.PATCH
+            enforce_format = True
+        elif issue.start_line == issue.end_line and issue.start_line:
             preferred_format = FixFormat.REPLACE
             enforce_format = True
 
@@ -144,6 +154,25 @@ class FixLoopRunner:
                 last_error = reason
                 error_history.append(reason)
                 print(f"[Agent] Invalid fix payload: {reason}")
+                lowered = reason.lower()
+                if (
+                    "patch check failed" in lowered
+                    or "corrupt patch" in lowered
+                    or "patch does not apply" in lowered
+                ):
+                    if force_patch:
+                        preferred_format = FixFormat.PATCH
+                        enforce_format = True
+                    else:
+                        preferred_format = FixFormat.REPLACE
+                        enforce_format = True
+                elif "fix format must be 'patch'" in lowered:
+                    if not force_patch:
+                        preferred_format = FixFormat.REPLACE
+                        enforce_format = True
+                elif "fix format must be 'replace'" in lowered:
+                    preferred_format = FixFormat.REPLACE
+                    enforce_format = True
                 agent._write_run_file(
                     run_dir,
                     f"attempt_{attempt}_payload.json",

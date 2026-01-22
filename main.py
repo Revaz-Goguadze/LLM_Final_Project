@@ -32,16 +32,42 @@ def _read_target_files(path: str) -> list[str]:
         paths.append(os.path.abspath(path))
     return paths
 
+def _truncate_lines(lines: list[str], max_chars: int) -> list[str]:
+    used = 0
+    kept = []
+    for line in lines:
+        line_len = len(line) + 1
+        if used + line_len > max_chars and kept:
+            break
+        kept.append(line)
+        used += line_len
+        if used >= max_chars:
+            break
+    return kept
+
+
 def _build_snapshot(paths: list[str], max_chars: int = 2000) -> str:
     blocks = []
+    cwd = os.getcwd()
     for file_path in paths:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+                lines = f.read().splitlines()
         except Exception:
             continue
-        content = content[:max_chars]
-        blocks.append(f"FILE: {file_path}\n{content}")
+        lines = _truncate_lines(lines, max_chars)
+        rel_path = os.path.relpath(file_path, cwd)
+        line_count = len(lines)
+        if line_count == 0:
+            continue
+        header = [
+            f"diff --git a/{rel_path} b/{rel_path}",
+            f"--- a/{rel_path}",
+            f"+++ b/{rel_path}",
+            f"@@ -1,{line_count} +1,{line_count} @@",
+        ]
+        body = [f"+{line}" for line in lines]
+        blocks.append("\n".join(header + body))
     return "\n\n".join(blocks)
 
 @app.command()

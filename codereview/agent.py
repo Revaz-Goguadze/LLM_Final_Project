@@ -138,6 +138,12 @@ class ReActAgent:
 
             found = any(variant in file_content for variant in evidence_variants)
             if not found:
+                if issue.location.line and issue.line_text:
+                    line_idx = issue.location.line - 1
+                    if 0 <= line_idx < len(lines):
+                        current_line = lines[line_idx].strip()
+                        if issue.line_text.strip() == current_line:
+                            return True, ""
                 return False, "Evidence string not found in file"
 
         return True, ""
@@ -157,6 +163,49 @@ class ReActAgent:
             return json.loads(content)
         except Exception:
             return None
+
+    @staticmethod
+    def _normalize_patch_paths(patch_text: str) -> str:
+        cwd = os.getcwd().replace("\\", "/").rstrip("/")
+        cwd_noslash = cwd.lstrip("/")
+
+        def _to_rel(path: str) -> str:
+            cleaned = path.replace("\\", "/")
+            if cleaned.startswith(cwd + "/"):
+                return cleaned[len(cwd) + 1 :]
+            if cleaned.startswith(cwd_noslash + "/"):
+                return cleaned[len(cwd_noslash) + 1 :]
+            return cleaned.lstrip("/")
+
+        normalized = []
+        for line in patch_text.splitlines():
+            if line.startswith("diff --git "):
+                parts = line.split()
+                if len(parts) >= 4:
+                    a_path = _to_rel(parts[2].lstrip("ab/"))
+                    b_path = _to_rel(parts[3].lstrip("ab/"))
+                    normalized.append(f"diff --git a/{a_path} b/{b_path}")
+                else:
+                    normalized.append(line)
+                continue
+            if line.startswith("--- "):
+                path = line[4:].strip()
+                if path != "/dev/null":
+                    path = _to_rel(path.lstrip("ab/"))
+                    normalized.append(f"--- a/{path}")
+                else:
+                    normalized.append(line)
+                continue
+            if line.startswith("+++ "):
+                path = line[4:].strip()
+                if path != "/dev/null":
+                    path = _to_rel(path.lstrip("ab/"))
+                    normalized.append(f"+++ b/{path}")
+                else:
+                    normalized.append(line)
+                continue
+            normalized.append(line)
+        return "\n".join(normalized) + ("\n" if patch_text.endswith("\n") else "")
 
     def _parse_fix_payload(self, content: str) -> dict:
         payload = self._extract_json_payload(content) or {}
@@ -190,10 +239,17 @@ class ReActAgent:
                 return False, "Missing patch content", {}
             if not patch_text.endswith("\n"):
                 patch_text += "\n"
+            patch_text = self._normalize_patch_paths(patch_text)
             if diff_text:
                 diff_files = set(parse_changed_lines(diff_text).keys())
                 touched = parse_unified_diff_files(patch_text)
-                if diff_files and any(f not in diff_files for f in touched):
+                if diff_files and any(
+                    all(
+                        not (f == df or f.endswith(f"/{df}") or df.endswith(f"/{f}"))
+                        for df in diff_files
+                    )
+                    for f in touched
+                ):
                     return False, "Patch touches files outside the analyzed diff", {}
             if not self.fixer.check_patch_text(patch_text):
                 return False, self.fixer.get_last_error() or "Patch check failed", {}
@@ -218,11 +274,24 @@ class ReActAgent:
 
         if issue.start_line and issue.end_line:
             if start_line != issue.start_line or end_line != issue.end_line:
-                return (
-                    False,
-                    "Replacement must match the target line range from the report",
-                    {},
-                )
+                if issue.chunk_start_line and issue.chunk_end_line:
+                    if not (
+                        issue.chunk_start_line
+                        <= start_line
+                        <= end_line
+                        <= issue.chunk_end_line
+                    ):
+                        return (
+                            False,
+                            "Replacement must stay within the target chunk range",
+                            {},
+                        )
+                else:
+                    return (
+                        False,
+                        "Replacement must match the target line range from the report",
+                        {},
+                    )
 
         if issue.line_text:
             target_text = issue.line_text.strip()
