@@ -10,6 +10,9 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 # LLM Provider
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "gemini").lower()
 
+# Custom Base URL (for local LLM servers like Ollama, LM Studio, etc.)
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "")  # e.g., "http://127.0.0.1:8045/v1"
+
 # Models - LLMs
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 DEFAULT_LLM_MODEL = GEMINI_MODEL if LLM_PROVIDER == "gemini" else "gpt-4o-mini"

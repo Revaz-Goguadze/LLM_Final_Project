@@ -8,6 +8,7 @@ from openai import OpenAI
 
 from .config import (
     OPENAI_API_KEY,
+    OPENAI_BASE_URL,
     GEMINI_API_KEY,
     LLM_PROVIDER,
     MODEL_JUDGE,
@@ -57,11 +58,14 @@ class ReActAgent:
         else:
             if not OPENAI_API_KEY:
                 raise ValueError("OPENAI_API_KEY is required for fix generation.")
-            self.client = OpenAI(
-                api_key=OPENAI_API_KEY,
-                timeout=OPENAI_TIMEOUT,
-                max_retries=2,
-            )
+            client_kwargs = {
+                "api_key": OPENAI_API_KEY,
+                "timeout": OPENAI_TIMEOUT,
+                "max_retries": 2,
+            }
+            if OPENAI_BASE_URL:
+                client_kwargs["base_url"] = OPENAI_BASE_URL
+            self.client = OpenAI(**client_kwargs)
         self.retriever = HybridRetriever()
         self.docs_retriever = HybridRetriever(
             collection=DOCS_DB_COLLECTION,
