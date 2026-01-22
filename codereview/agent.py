@@ -67,10 +67,13 @@ class ReActAgent:
                 client_kwargs["base_url"] = OPENAI_BASE_URL
             self.client = OpenAI(**client_kwargs)
         self.retriever = HybridRetriever()
-        self.docs_retriever = HybridRetriever(
-            collection=DOCS_DB_COLLECTION,
-            bm25_index_path=DOCS_BM25_INDEX_PATH,
-        )
+        try:
+            self.docs_retriever = HybridRetriever(
+                collection=DOCS_DB_COLLECTION,
+                bm25_index_path=DOCS_BM25_INDEX_PATH,
+            )
+        except (ValueError, EOFError):
+            self.docs_retriever = None
         self.fixer = CodeFixer()
         self.fix_context_builder = FixContextBuilder(
             self.retriever, self.docs_retriever
@@ -135,9 +138,11 @@ class ReActAgent:
             # Try multiple evidence variants to handle diff formatting
             evidence_variants = [
                 evidence,  # Original
-                re.sub(r'^[\+\-]\s*', '', evidence),  # Strip leading +/-
-                re.sub(r'^[\+\-]\s*', '', evidence, flags=re.MULTILINE),  # Strip from all lines
-                ' '.join(evidence.split()),  # Normalize whitespace
+                re.sub(r"^[\+\-]\s*", "", evidence),  # Strip leading +/-
+                re.sub(
+                    r"^[\+\-]\s*", "", evidence, flags=re.MULTILINE
+                ),  # Strip from all lines
+                " ".join(evidence.split()),  # Normalize whitespace
             ]
 
             found = any(variant in file_content for variant in evidence_variants)
@@ -204,10 +209,14 @@ class ReActAgent:
             return True, "", {"format": "patch", "patch": patch_text}
 
         replacement = str(payload.get("replacement", "")).strip()
-        if not replacement:
+        # Allow empty replacement for line removal (deletion)
+        # But replacement key must be present in payload
+        if "replacement" not in payload:
             return False, "Missing replacement content", {}
 
-        start_line = payload.get("start_line") or issue.start_line or issue.location.line
+        start_line = (
+            payload.get("start_line") or issue.start_line or issue.location.line
+        )
         end_line = payload.get("end_line") or issue.end_line or start_line
         try:
             start_line = int(start_line) if start_line is not None else None
@@ -230,24 +239,41 @@ class ReActAgent:
 
         if issue.line_text:
             target_text = issue.line_text.strip()
-            replacement_lines = [line for line in replacement.splitlines() if line.strip()]
+            replacement_lines = [
+                line for line in replacement.splitlines() if line.strip()
+            ]
             if start_line == end_line and len(replacement_lines) > 5:
                 return False, "Replacement too large for a single-line target", {}
             if target_text and not target_text.startswith(("def ", "class ")):
-                if any(line.lstrip().startswith(("def ", "class ")) for line in replacement_lines):
-                    return False, "Replacement introduces a new definition outside target scope", {}
+                if any(
+                    line.lstrip().startswith(("def ", "class "))
+                    for line in replacement_lines
+                ):
+                    return (
+                        False,
+                        "Replacement introduces a new definition outside target scope",
+                        {},
+                    )
 
         if diff_text:
-            changed_lines = parse_changed_lines(diff_text).get(issue.location.file, set())
-            if changed_lines and not _range_overlaps(start_line, end_line, changed_lines):
+            changed_lines = parse_changed_lines(diff_text).get(
+                issue.location.file, set()
+            )
+            if changed_lines and not _range_overlaps(
+                start_line, end_line, changed_lines
+            ):
                 return False, "Replacement does not overlap changed diff lines", {}
 
-        return True, "", {
-            "format": "replace",
-            "replacement": replacement,
-            "start_line": start_line,
-            "end_line": end_line,
-        }
+        return (
+            True,
+            "",
+            {
+                "format": "replace",
+                "replacement": replacement,
+                "start_line": start_line,
+                "end_line": end_line,
+            },
+        )
 
     def _generate_fix(
         self,
@@ -293,7 +319,7 @@ INSTRUCTIONS:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=4096,  # GLM-4.7 reasoning mode needs more tokens
+                    max_tokens=32768,  # 32K for GLM-4.7 reasoning mode
                     timeout=OPENAI_TIMEOUT,
                 )
                 if response.choices and response.choices[0].message:
@@ -318,9 +344,13 @@ INSTRUCTIONS:
             related = "\n".join(f"- {path}" for path in fix_context.related_files)
             blocks.append(f"RELATED_FILES:\n{related}")
         if fix_context.code_rag_results:
-            blocks.append(self._format_rag_section("CODE_RAG", fix_context.code_rag_results))
+            blocks.append(
+                self._format_rag_section("CODE_RAG", fix_context.code_rag_results)
+            )
         if fix_context.docs_rag_results:
-            blocks.append(self._format_rag_section("DOCS_RAG", fix_context.docs_rag_results))
+            blocks.append(
+                self._format_rag_section("DOCS_RAG", fix_context.docs_rag_results)
+            )
         return "\n\n".join(blocks)
 
     @staticmethod
@@ -380,18 +410,21 @@ INSTRUCTIONS:
         if evidence_missing or last_error:
             steps.append("SEARCH_CODE")
             try:
-                query = f"{issue.description}\n{issue.evidence}\n{last_error or ''}".strip()
+                query = (
+                    f"{issue.description}\n{issue.evidence}\n{last_error or ''}".strip()
+                )
                 related = self.retriever.search(query, n_results=3)
                 for item in related:
                     meta = item.get("metadata", {})
-                    header = (
-                        f"{meta.get('file_path', 'unknown')}:{meta.get('start_line', '?')}-{meta.get('end_line', '?')}"
-                    )
+                    header = f"{meta.get('file_path', 'unknown')}:{meta.get('start_line', '?')}-{meta.get('end_line', '?')}"
                     blocks.append(f"{header}\n{item.get('content', '')}")
             except Exception:
                 pass
 
-        should_read_docs = "best practice" in issue.description.lower() or "security" in issue.type.lower()
+        should_read_docs = (
+            "best practice" in issue.description.lower()
+            or "security" in issue.type.lower()
+        )
         if should_read_docs:
             steps.append("READ_DOCS")
             try:

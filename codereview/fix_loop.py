@@ -164,9 +164,17 @@ class FixLoopRunner:
             else:
                 current_fix = normalized.get("replacement", "")
 
-            if not current_fix:
+            # For replace format, empty replacement is valid for line removal
+            # For patch format, empty patch is invalid
+            if not current_fix and is_patch:
                 print("[Agent] Empty fix output, retrying")
                 last_error = "Empty fix output"
+                error_history.append(last_error)
+                continue
+            # For replace format, check if replacement key exists (empty is ok for deletion)
+            if not is_patch and "replacement" not in normalized:
+                print("[Agent] Missing replacement key, retrying")
+                last_error = "Missing replacement key"
                 error_history.append(last_error)
                 continue
 

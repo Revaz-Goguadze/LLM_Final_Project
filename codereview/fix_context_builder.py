@@ -15,7 +15,7 @@ class FixContextBuilder:
     def __init__(
         self,
         code_retriever: HybridRetriever,
-        docs_retriever: HybridRetriever,
+        docs_retriever: Optional[HybridRetriever],
         base_context_radius: int = 15,
     ):
         self.code_retriever = code_retriever
@@ -109,10 +109,13 @@ class FixContextBuilder:
     def _should_read_docs(self, issue: BugIssue) -> bool:
         """Determine if docs RAG should be searched."""
         return (
-            "security" in issue.type.lower()
-            or "best practice" in issue.description.lower()
-            or "authentication" in issue.description.lower()
-            or "authorization" in issue.description.lower()
+            self.docs_retriever is not None
+            and (
+                "security" in issue.type.lower()
+                or "best practice" in issue.description.lower()
+                or "authentication" in issue.description.lower()
+                or "authorization" in issue.description.lower()
+            )
         )
 
     def _search_docs_rag(self, issue: BugIssue) -> List[Dict[str, Any]]:
