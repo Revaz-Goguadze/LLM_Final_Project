@@ -3,6 +3,7 @@ import ast
 from typing import Optional, List, Dict, Any
 
 from .models import BugIssue, FixContext
+from .path_utils import resolve_repo_path
 from .retriever import HybridRetriever
 
 
@@ -73,11 +74,12 @@ class FixContextBuilder:
         self, file_path: str, line: int, context_radius: int
     ) -> str:
         """Read file context with line numbers."""
-        if not os.path.exists(file_path):
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             return ""
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(abs_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except (OSError, UnicodeDecodeError):
             return ""
@@ -150,11 +152,12 @@ class FixContextBuilder:
 
     def _find_related_files(self, file_path: str) -> List[str]:
         """Find related files based on imports."""
-        if not os.path.exists(file_path):
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             return []
 
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(abs_path, "r", encoding="utf-8") as f:
                 source = f.read()
         except (OSError, UnicodeDecodeError):
             return []
@@ -173,7 +176,7 @@ class FixContextBuilder:
             pass
 
         # Filter to existing files
-        base_dir = os.path.dirname(file_path)
+        base_dir = os.path.dirname(abs_path)
         return [
             f
             for f in related

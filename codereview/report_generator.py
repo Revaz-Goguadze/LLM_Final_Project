@@ -6,6 +6,7 @@ from typing import Dict, Set
 from .models import FinalReport
 from .chunker import ASTChunker
 from .diff_utils import parse_changed_lines
+from .path_utils import normalize_repo_path, resolve_repo_path
 
 class ReportGenerator:
     @staticmethod
@@ -20,13 +21,15 @@ class ReportGenerator:
             if not issue.location or not issue.location.file:
                 continue
 
-            file_path = issue.location.file
-            if not os.path.exists(file_path):
+            file_path = normalize_repo_path(issue.location.file)
+            issue.location.file = file_path
+            abs_path = resolve_repo_path(file_path)
+            if not os.path.exists(abs_path):
                 continue
 
             if file_path not in file_cache:
                 try:
-                    with open(file_path, "r", encoding="utf-8") as f:
+                    with open(abs_path, "r", encoding="utf-8") as f:
                         file_cache[file_path] = f.readlines()
                 except Exception:
                     file_cache[file_path] = []
@@ -47,7 +50,7 @@ class ReportGenerator:
                     or issue.chunk_name is None
                 ):
                     if file_path not in chunk_cache:
-                        chunk_cache[file_path] = chunker.chunk_file(file_path)
+                        chunk_cache[file_path] = chunker.chunk_file(abs_path)
                     for chunk in chunk_cache[file_path]:
                         if chunk.start_line <= line_no <= chunk.end_line:
                             issue.chunk_start_line = chunk.start_line
@@ -80,17 +83,17 @@ class ReportGenerator:
             if issue.confidence is not None and issue.confidence < 0.8:
                 continue
 
-            file_path = issue.location.file if issue.location else None
+            file_path = normalize_repo_path(issue.location.file) if issue.location else None
             if not file_path:
                 continue
+            if issue.location:
+                issue.location.file = file_path
 
-            abs_path = file_path
-            if not os.path.isabs(file_path):
-                abs_path = os.path.abspath(file_path)
+            abs_path = resolve_repo_path(file_path)
             if not os.path.exists(abs_path):
                 continue
 
-            rel_path = os.path.relpath(abs_path, cwd)
+            rel_path = normalize_repo_path(abs_path, cwd)
             if diff_files and rel_path not in diff_files and file_path not in diff_files:
                 continue
 

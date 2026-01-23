@@ -31,6 +31,7 @@ from .fix_verifier import FixVerifier
 from .fix_loop import FixLoopRunner
 from .llm_utils import RateLimiter, should_retry, backoff_sleep
 from .gemini_client import GeminiClient
+from .path_utils import normalize_repo_path, resolve_repo_path
 
 
 def _range_overlaps(start_line: int, end_line: int, changed: Set[int]) -> bool:
@@ -77,10 +78,13 @@ class ReActAgent:
         self.error_classifier = ErrorClassifier()
 
     def _read_file_lines(self, file_path: str) -> list:
-        if not os.path.exists(file_path):
+        if not file_path:
+            return []
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             return []
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
+            with open(abs_path, "r", encoding="utf-8") as f:
                 return f.readlines()
         except Exception:
             return []
@@ -109,8 +113,10 @@ class ReActAgent:
         return "".join(lines[start_idx:end_idx]).strip()
 
     def _validate_issue(self, issue: BugIssue) -> Tuple[bool, str]:
-        file_path = issue.location.file
-        if not file_path or not os.path.exists(file_path):
+        file_path = normalize_repo_path(issue.location.file)
+        issue.location.file = file_path
+        abs_path = resolve_repo_path(file_path)
+        if not file_path or not os.path.exists(abs_path):
             return False, f"File not found: {file_path}"
 
         lines = self._read_file_lines(file_path)
@@ -253,6 +259,33 @@ class ReActAgent:
                     return False, "Patch touches files outside the analyzed diff", {}
             if not self.fixer.check_patch_text(patch_text):
                 return False, self.fixer.get_last_error() or "Patch check failed", {}
+            changed_lines = parse_changed_lines(patch_text).get(
+                issue.location.file, set()
+            )
+            if changed_lines:
+                target_line = issue.location.line or 1
+                window_start = max(1, target_line - 20)
+                window_end = target_line + 20
+                if issue.chunk_start_line and issue.chunk_end_line:
+                    for line in changed_lines:
+                        if not (
+                            issue.chunk_start_line
+                            <= line
+                            <= issue.chunk_end_line
+                        ):
+                            return (
+                                False,
+                                "Patch touches lines outside the allowed window",
+                                {},
+                            )
+                else:
+                    for line in changed_lines:
+                        if not (window_start <= line <= window_end):
+                            return (
+                                False,
+                                "Patch touches lines outside the allowed window",
+                                {},
+                            )
             return True, "", {"format": "patch", "patch": patch_text}
 
         replacement = str(payload.get("replacement", "")).strip()
@@ -272,6 +305,9 @@ class ReActAgent:
         if not end_line or end_line < start_line:
             return False, "Invalid end_line in payload", {}
 
+        target_line = issue.location.line or start_line
+        window_start = max(1, (target_line or 1) - 20)
+        window_end = (target_line or start_line) + 20
         if issue.start_line and issue.end_line:
             if start_line != issue.start_line or end_line != issue.end_line:
                 if issue.chunk_start_line and issue.chunk_end_line:
@@ -287,25 +323,44 @@ class ReActAgent:
                             {},
                         )
                 else:
-                    return (
-                        False,
-                        "Replacement must match the target line range from the report",
-                        {},
-                    )
+                    if not (window_start <= start_line <= end_line <= window_end):
+                        return (
+                            False,
+                            "Replacement must stay within the target window",
+                            {},
+                        )
 
         if issue.line_text:
             target_text = issue.line_text.strip()
-            replacement_lines = [line for line in replacement.splitlines() if line.strip()]
-            if start_line == end_line and len(replacement_lines) > 5:
-                return False, "Replacement too large for a single-line target", {}
+            replacement_lines = [
+                line for line in replacement.splitlines() if line.strip()
+            ]
             if target_text and not target_text.startswith(("def ", "class ")):
-                if any(line.lstrip().startswith(("def ", "class ")) for line in replacement_lines):
-                    return False, "Replacement introduces a new definition outside target scope", {}
+                introduces_def = any(
+                    line.lstrip().startswith(("def ", "class "))
+                    for line in replacement_lines
+                )
+                if introduces_def and issue.chunk_type not in {"function", "class"}:
+                    return (
+                        False,
+                        "Replacement introduces a new definition outside target scope",
+                        {},
+                    )
 
         if diff_text:
             changed_lines = parse_changed_lines(diff_text).get(issue.location.file, set())
             if changed_lines and not _range_overlaps(start_line, end_line, changed_lines):
-                return False, "Replacement does not overlap changed diff lines", {}
+                within_window = window_start <= start_line <= end_line <= window_end
+                within_chunk = False
+                if issue.chunk_start_line and issue.chunk_end_line:
+                    within_chunk = (
+                        issue.chunk_start_line
+                        <= start_line
+                        <= end_line
+                        <= issue.chunk_end_line
+                    )
+                if not (within_window or within_chunk):
+                    return False, "Replacement does not overlap changed diff lines", {}
 
         return True, "", {
             "format": "replace",

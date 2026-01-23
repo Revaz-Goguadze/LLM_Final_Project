@@ -59,6 +59,7 @@ class Order:
     def __init__(self, catalog: ProductCatalog, inventory: Inventory) -> None:
         self._catalog = catalog
         self._inventory = inventory
+        self._inventory = inventory
         self._items: dict[str, int] = {}
 
     def add_item(self, sku: str, qty: int) -> None:

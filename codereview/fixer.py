@@ -5,6 +5,7 @@ from typing import Iterable, Optional, Tuple, List
 from .models import BugIssue
 from .config import VERIFY_COMMAND, ALLOW_FIX_PATCH
 from .diff_utils import parse_unified_diff_files
+from .path_utils import normalize_repo_path, resolve_repo_path
 
 
 class CodeFixer:
@@ -14,6 +15,7 @@ class CodeFixer:
         self._allow_patch = ALLOW_FIX_PATCH
 
     def _snapshot_file(self, file_path: str) -> None:
+        file_path = resolve_repo_path(file_path)
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 self._backups[file_path] = f.read()
@@ -60,6 +62,7 @@ class CodeFixer:
         if not evidence.strip():
             self.last_error = "Empty evidence string"
             return False
+        file_path = resolve_repo_path(file_path)
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 content = f.read()
@@ -81,6 +84,7 @@ class CodeFixer:
     ) -> bool:
         import textwrap
 
+        file_path = resolve_repo_path(file_path)
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
@@ -141,25 +145,27 @@ class CodeFixer:
         return True
 
     def apply_fix(self, issue: BugIssue) -> bool:
-        file_path = issue.location.file
-        if not os.path.exists(file_path):
+        file_path = normalize_repo_path(issue.location.file)
+        issue.location.file = file_path
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             self.last_error = f"File {file_path} not found"
             print(self.last_error)
             return False
 
         print(f"Applying fix to {file_path}...")
-        self._snapshot_file(file_path)
+        self._snapshot_file(abs_path)
         suggested = issue.suggested_fix or ""
         if self._allow_patch and self._is_unified_diff(suggested):
             return self._apply_patch(suggested)
-        if self._apply_simple_replace(file_path, issue.evidence or "", suggested):
+        if self._apply_simple_replace(abs_path, issue.evidence or "", suggested):
             return True
         if issue.location.line and issue.location.line > 0:
             print(
                 f"Evidence mismatch, falling back to line-based fix at line {issue.location.line}"
             )
             return self._apply_line_range_fix(
-                file_path, issue.location.line, issue.location.line, suggested
+                abs_path, issue.location.line, issue.location.line, suggested
             )
         return False
 
@@ -171,18 +177,20 @@ class CodeFixer:
         end_line: Optional[int] = None,
         is_patch: bool = False,
     ) -> bool:
-        file_path = issue.location.file
-        if not os.path.exists(file_path):
+        file_path = normalize_repo_path(issue.location.file)
+        issue.location.file = file_path
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             self.last_error = f"File {file_path} not found"
             return False
 
         print(f"Applying fix to {file_path}...")
-        self._snapshot_file(file_path)
+        self._snapshot_file(abs_path)
 
         if self._allow_patch and (is_patch or self._is_unified_diff(fix_content)):
             return self._apply_patch(fix_content)
 
-        if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
+        if self._apply_simple_replace(abs_path, issue.evidence or "", fix_content):
             return True
 
         if start_line is None:
@@ -206,8 +214,10 @@ class CodeFixer:
         end_line: Optional[int] = None,
         is_patch: bool = False,
     ) -> Tuple[bool, List[str]]:
-        file_path = issue.location.file
-        if not os.path.exists(file_path):
+        file_path = normalize_repo_path(issue.location.file)
+        issue.location.file = file_path
+        abs_path = resolve_repo_path(file_path)
+        if not os.path.exists(abs_path):
             self.last_error = f"File {file_path} not found"
             return False, []
 
@@ -234,7 +244,7 @@ class CodeFixer:
 
         # Non-patch path
         touched_files = self._snapshot_files([file_path])
-        if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
+        if self._apply_simple_replace(abs_path, issue.evidence or "", fix_content):
             return True, touched_files
 
         if start_line is None:
@@ -247,7 +257,7 @@ class CodeFixer:
                 f"Evidence mismatch, falling back to line-based fix at line range {start_line}-{end_line}"
             )
             applied = self._apply_line_range_fix(
-                file_path, start_line, end_line, fix_content
+                abs_path, start_line, end_line, fix_content
             )
             if not applied:
                 self.rollback_files(touched_files)
@@ -307,15 +317,17 @@ class CodeFixer:
 
     def rollback(self, file_path: str):
         print(f"Rolling back changes to {file_path}...")
-        if file_path in self._backups:
+        abs_path = resolve_repo_path(file_path)
+        if abs_path in self._backups:
             try:
-                with open(file_path, "w", encoding="utf-8") as f:
-                    f.write(self._backups[file_path])
+                with open(abs_path, "w", encoding="utf-8") as f:
+                    f.write(self._backups[abs_path])
                 return
             except Exception:
                 pass
-        subprocess.run(["git", "restore", "--", file_path], capture_output=True)
-        subprocess.run(["git", "checkout", "--", file_path], capture_output=True)
+        rel_path = normalize_repo_path(file_path)
+        subprocess.run(["git", "restore", "--", rel_path], capture_output=True)
+        subprocess.run(["git", "checkout", "--", rel_path], capture_output=True)
 
     def rollback_files(self, file_paths: Iterable[str]) -> None:
         for file_path in file_paths:

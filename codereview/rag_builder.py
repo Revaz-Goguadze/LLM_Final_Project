@@ -30,12 +30,33 @@ def truncate_text(text: str, max_chars: int = 1200) -> str:
 
 def build_rag_query(user_query: str | None, diff_text: str, max_diff_chars: int = 2000) -> str:
     diff_lines = []
+    hunks = []
+    current_file = ""
+    current_hunk = ""
+    current_changes = []
     for line in diff_text.splitlines():
-        if line.startswith("+++") or line.startswith("---") or line.startswith("@@"):
+        if line.startswith("diff ") or line.startswith("index "):
+            continue
+        if line.startswith("+++ b/"):
+            current_file = line.replace("+++ b/", "").strip()
+            continue
+        if line.startswith("@@"):
+            if current_hunk and current_changes:
+                hunks.append(
+                    f"{current_file} {current_hunk}\n" + "\n".join(current_changes)
+                )
+            current_hunk = line
+            current_changes = []
             continue
         if line.startswith("+") or line.startswith("-"):
-            diff_lines.append(line)
+            if not line.startswith("+++ ") and not line.startswith("--- "):
+                diff_lines.append(line)
+                current_changes.append(line)
+            continue
+    if current_hunk and current_changes:
+        hunks.append(f"{current_file} {current_hunk}\n" + "\n".join(current_changes))
     diff_snippet = _truncate("\n".join(diff_lines), max_diff_chars)
+    hunk_context = _truncate("\n\n".join(hunks), max_diff_chars)
     file_paths = extract_diff_file_paths(diff_text)
     parts = []
     if user_query:
@@ -44,6 +65,8 @@ def build_rag_query(user_query: str | None, diff_text: str, max_diff_chars: int 
         parts.append("Files: " + ", ".join(file_paths))
     if diff_snippet:
         parts.append("Diff snippet:\n" + diff_snippet)
+    if hunk_context:
+        parts.append("Diff hunks:\n" + hunk_context)
     return "\n\n".join(parts).strip()
 
 

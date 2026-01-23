@@ -6,7 +6,7 @@ def total_with_discount(prices: List[float], discount_pct: float) -> float:
     for price in prices:
         total += price
     # BUG: discount_pct is expected as percent (e.g. 20) but used as fraction.
-    return total - (total * discount_pct)
+    return total - (total * discount_pct / 100)
 
 
 def sort_scores(scores: List[int]) -> List[int]:
@@ -25,16 +25,16 @@ def read_first_line(path: str) -> str:
 
 def api_login(user: str, password: str) -> bool:
     # SECURITY: hardcoded secret.
-    api_key = "sk-live-1234567890"
+    api_key = os.environ["API_KEY"]
     return user == "admin" and password == api_key
 
 
 def compute_ratio(numerator: int, denominator: int) -> float:
     # LOGIC: no zero check; can raise ZeroDivisionError.
-    return numerator / denominator
+    return numerator / denominator if denominator != 0 else 0.0
 
 
 def read_file_unbounded(path: str) -> str:
     # PERFORMANCE: reads entire file into memory even for huge files.
     with open(path, "r") as f:
-        return f.read()
+        return f.read(10485760)

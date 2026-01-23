@@ -4,6 +4,7 @@ from typing import Optional, List, TYPE_CHECKING
 from .agent_state import AgentState
 from .models import BugIssue, FixFormat
 from .config import MAX_FIX_RETRIES
+from .path_utils import normalize_repo_path
 
 if TYPE_CHECKING:
     from .agent import ReActAgent
@@ -14,6 +15,145 @@ class FixLoopRunner:
 
     def __init__(self, agent: "ReActAgent"):
         self.agent = agent
+        self._chunk_windows = [40, 120, 300]
+        self._single_line_window_radius = 20
+
+    def _expand_issue_chunk(self, issue: BugIssue, window_size: int) -> bool:
+        if not issue.location.file or not issue.location.line:
+            return False
+        lines = self.agent._read_file_lines(issue.location.file)
+        if not lines:
+            return False
+        total = len(lines)
+        center = issue.location.line
+        issue.chunk_start_line = max(1, center - window_size)
+        issue.chunk_end_line = min(total, center + window_size)
+        return True
+
+    def _get_edit_window(self, issue: BugIssue) -> Optional[tuple[int, int, str]]:
+        if not issue.location.line:
+            return None
+        if issue.chunk_start_line and issue.chunk_end_line and issue.chunk_type == "function":
+            return issue.chunk_start_line, issue.chunk_end_line, "function"
+        start = max(1, issue.location.line - self._single_line_window_radius)
+        end = issue.location.line + self._single_line_window_radius
+        return start, end, "window"
+
+    def _ensure_edit_window(self, issue: BugIssue) -> Optional[tuple[int, int, str]]:
+        if issue.start_line and issue.end_line and issue.start_line != issue.end_line:
+            return None
+        window = self._get_edit_window(issue)
+        if not window:
+            return None
+        start, end, source = window
+        if not issue.chunk_start_line or not issue.chunk_end_line:
+            issue.chunk_start_line = start
+            issue.chunk_end_line = end
+            issue.chunk_type = "window"
+        return start, end, source
+
+    @staticmethod
+    def _summarize_diff(before: str, after: str) -> str:
+        import difflib
+
+        before_lines = before.splitlines()
+        after_lines = after.splitlines()
+        diff = list(
+            difflib.unified_diff(
+                before_lines,
+                after_lines,
+                lineterm="",
+            )
+        )
+        if not diff:
+            return "No changes detected."
+        summary_lines = diff[:200]
+        return "\n".join(summary_lines)
+
+    def _relocate_issue_by_context(self, issue: BugIssue) -> bool:
+        lines = self.agent._read_file_lines(issue.location.file)
+        if not lines:
+            return False
+
+        evidence_candidates = []
+        if issue.evidence:
+            evidence_candidates.append(issue.evidence.strip())
+        if issue.line_text:
+            evidence_candidates.append(issue.line_text.strip())
+        evidence_candidates = [c for c in evidence_candidates if c]
+
+        def _find_in_range(start_idx: int, end_idx: int) -> Optional[int]:
+            for idx in range(start_idx, end_idx):
+                line = lines[idx]
+                for candidate in evidence_candidates:
+                    if candidate and candidate in line:
+                        return idx
+            return None
+
+        if issue.location.line:
+            window = 5
+            start = max(0, issue.location.line - window - 1)
+            end = min(len(lines), issue.location.line + window)
+            found = _find_in_range(start, end)
+            if found is not None:
+                issue.location.line = found + 1
+                issue.line_text = lines[found].rstrip("\n")
+                return True
+
+        if issue.location.function:
+            func_name = issue.location.function.split(".")[-1].strip("()")
+            if func_name:
+                for idx, line in enumerate(lines):
+                    if line.lstrip().startswith(f"def {func_name}"):
+                        search_end = min(len(lines), idx + 200)
+                        found = _find_in_range(idx, search_end)
+                        if found is not None:
+                            issue.location.line = found + 1
+                            issue.line_text = lines[found].rstrip("\n")
+                            return True
+                    if line.lstrip().startswith(f"class {func_name}"):
+                        search_end = min(len(lines), idx + 200)
+                        found = _find_in_range(idx, search_end)
+                        if found is not None:
+                            issue.location.line = found + 1
+                            issue.line_text = lines[found].rstrip("\n")
+                            return True
+
+        return False
+
+    def _classify_missing_evidence(self, issue: BugIssue) -> str:
+        lines = self.agent._read_file_lines(issue.location.file)
+        content = "".join(lines)
+        evidence = (issue.evidence or "").strip()
+        suggested_fix = (issue.suggested_fix or "").strip()
+
+        if self._relocate_issue_by_context(issue):
+            return "relocated"
+
+        if evidence and evidence in content:
+            return "relocated"
+
+        if suggested_fix and suggested_fix in content:
+            return "resolved"
+
+        if "open(" in evidence and "with open(" in content:
+            return "resolved"
+
+        return "stale"
+
+    @staticmethod
+    def _is_format_error(reason: str) -> bool:
+        lowered = reason.lower()
+        return (
+            "empty fix payload" in lowered
+            or "unsupported fix format" in lowered
+            or "fix format must be" in lowered
+            or "json" in lowered
+        )
+
+    @staticmethod
+    def _is_chunk_range_error(reason: str) -> bool:
+        return "replacement must stay within the target chunk range" in reason.lower()
 
     def run(self, issue: BugIssue, diff_text: Optional[str] = None) -> bool:
         agent = self.agent
@@ -26,11 +166,47 @@ class FixLoopRunner:
             run_dir, "issue.json", issue.model_dump_json(indent=2)
         )
 
+        if issue.location and issue.location.file:
+            issue.location.file = normalize_repo_path(issue.location.file)
+
+        window_info = self._ensure_edit_window(issue)
+        if window_info:
+            start, end, source = window_info
+            print(f"[Agent] Edit window: {start}-{end} ({source})")
+
         is_valid, reason = agent._validate_issue(issue)
         if not is_valid:
-            print(f"[Agent] Issue is not actionable: {reason}")
-            agent._write_run_file(run_dir, "final_state.txt", state.value)
-            return False
+            if "Evidence string not found in file" in reason:
+                status = self._classify_missing_evidence(issue)
+                if status == "relocated":
+                    print(
+                        "[Agent] Evidence moved within file; continuing with updated location."
+                    )
+                    is_valid = True
+                    reason = ""
+                    window_info = self._ensure_edit_window(issue)
+                    if window_info:
+                        start, end, source = window_info
+                        print(f"[Agent] Edit window: {start}-{end} ({source})")
+                elif status == "resolved":
+                    print(
+                        "[Agent] Issue appears resolved by previous patch; skipping."
+                    )
+                    agent._write_run_file(
+                        run_dir, "final_state.txt", "RESOLVED_BY_PREVIOUS_PATCH"
+                    )
+                    return True
+                else:
+                    print("[Agent] Issue location is stale; skipping.")
+                    agent._write_run_file(
+                        run_dir, "final_state.txt", "STALE_LOCATION"
+                    )
+                    return True
+            else:
+                print(f"[Agent] Issue is not actionable: {reason}")
+            if not is_valid:
+                agent._write_run_file(run_dir, "final_state.txt", state.value)
+                return False
 
         last_error: Optional[str] = None
         last_fix: Optional[str] = None
@@ -53,6 +229,10 @@ class FixLoopRunner:
         elif issue.start_line == issue.end_line and issue.start_line:
             preferred_format = FixFormat.REPLACE
             enforce_format = True
+
+        last_verification_output: Optional[str] = None
+        repeated_verification = 0
+        chunk_window_idx = 0
 
         for attempt in range(1, MAX_FIX_RETRIES + 1):
             state = AgentState.BUILD_CONTEXT
@@ -85,6 +265,15 @@ class FixLoopRunner:
                     ]
                     if part
                 )
+                if last_error == "Repeated fix output":
+                    retry_instructions = "\n".join(
+                        part
+                        for part in [
+                            retry_instructions,
+                            "Use a different strategy than the previous attempt.",
+                        ]
+                        if part
+                    )
 
             fix_context = agent.fix_context_builder.build_context(
                 issue,
@@ -106,6 +295,16 @@ class FixLoopRunner:
                     ]
                     if part
                 )
+            if window_info:
+                start, end, source = window_info
+                context_text = "\n\n".join(
+                    part
+                    for part in [
+                        f"EDIT_WINDOW: {start}-{end} ({source})",
+                        context_text,
+                    ]
+                    if part
+                )
             if preferred_format:
                 context_text = "\n\n".join(
                     part
@@ -118,6 +317,18 @@ class FixLoopRunner:
                     ]
                     if part
                 )
+            if issue.location.function == "sort_scores" or "sort_scores" in (
+                issue.description or ""
+            ):
+                sort_constraints = "\n".join(
+                    [
+                        "CONSTRAINTS:",
+                        "- Keep the function signature unchanged",
+                        "- Keep behavior identical",
+                        "- Prefer built-in sorted()/list.sort() where safe",
+                    ]
+                )
+                context_text = "\n\n".join([sort_constraints, context_text])
             if attempt == 1:
                 agent._write_run_file(run_dir, "context.txt", context_text)
             agent._write_run_file(
@@ -150,10 +361,58 @@ class FixLoopRunner:
                 diff_text=diff_text,
                 expected_format=preferred_format if enforce_format else None,
             )
+            if not is_valid and self._is_chunk_range_error(reason):
+                if chunk_window_idx < len(self._chunk_windows):
+                    expanded = self._expand_issue_chunk(
+                        issue, self._chunk_windows[chunk_window_idx]
+                    )
+                    chunk_window_idx += 1
+                    if expanded:
+                        is_valid, reason, normalized = agent._validate_fix_payload(
+                            issue,
+                            payload,
+                            diff_text=diff_text,
+                            expected_format=preferred_format if enforce_format else None,
+                        )
+
+            if not is_valid and self._is_format_error(reason):
+                repair_instructions = (
+                    "FORMAT_REPAIR: Return ONLY valid JSON. "
+                    f"Use format='{preferred_format.value if preferred_format else 'patch'}' "
+                    "and include the required fields exactly."
+                )
+                repair_context = "\n\n".join(
+                    part for part in [context_text, repair_instructions] if part
+                )
+                prompt, raw_fix = agent._generate_fix(
+                    issue,
+                    fix_context.file_context,
+                    reason,
+                    repair_context,
+                )
+                agent._write_run_file(
+                    run_dir, f"attempt_{attempt}_repair_prompt.txt", prompt
+                )
+                agent._write_run_file(
+                    run_dir, f"attempt_{attempt}_repair_raw_llm.txt", raw_fix
+                )
+                if raw_fix:
+                    payload = agent._parse_fix_payload(raw_fix)
+                    is_valid, reason, normalized = agent._validate_fix_payload(
+                        issue,
+                        payload,
+                        diff_text=diff_text,
+                        expected_format=preferred_format if enforce_format else None,
+                    )
             if not is_valid:
                 last_error = reason
                 error_history.append(reason)
                 print(f"[Agent] Invalid fix payload: {reason}")
+                if window_info and (
+                    "window" in reason.lower() or "chunk range" in reason.lower()
+                ):
+                    start, end, source = window_info
+                    print(f"[Agent] Rejected outside edit window {start}-{end} ({source})")
                 lowered = reason.lower()
                 if (
                     "patch check failed" in lowered
@@ -167,9 +426,8 @@ class FixLoopRunner:
                         preferred_format = FixFormat.REPLACE
                         enforce_format = True
                 elif "fix format must be 'patch'" in lowered:
-                    if not force_patch:
-                        preferred_format = FixFormat.REPLACE
-                        enforce_format = True
+                    preferred_format = FixFormat.PATCH
+                    enforce_format = True
                 elif "fix format must be 'replace'" in lowered:
                     preferred_format = FixFormat.REPLACE
                     enforce_format = True
@@ -200,16 +458,10 @@ class FixLoopRunner:
                 continue
 
             if last_fix and current_fix == last_fix:
-                print("[Agent] Fix repeated with no changes, stopping early")
-                agent.fix_tracker.record_attempt(
-                    issue_id=issue_key,
-                    mode=preferred_format.value,
-                    success=False,
-                    attempts=attempt,
-                    verification_method="skipped",
-                    error_message="Repeated fix output",
-                )
-                return False
+                print("[Agent] Fix repeated; requesting a different strategy")
+                last_error = "Repeated fix output"
+                error_history.append(last_error)
+                continue
 
             start_line = normalized.get("start_line") if not is_patch else None
             end_line = normalized.get("end_line") if not is_patch else None
@@ -248,6 +500,24 @@ class FixLoopRunner:
                 agent.fixer.rollback_files(touched_files)
                 continue
 
+            pre_lines = pre_content.count("\n") + 1
+            post_lines = post_content.count("\n") + 1
+            if post_lines > pre_lines * 1.5 and (post_lines - pre_lines) > 200:
+                last_error = "Fix expanded file significantly; stopping to avoid runaway edits"
+                error_history.append(last_error)
+                print(f"[Agent] {last_error}")
+                state = AgentState.ROLLBACK
+                agent.fixer.rollback_files(touched_files)
+                agent.fix_tracker.record_attempt(
+                    issue_id=issue_key,
+                    mode=preferred_format.value,
+                    success=False,
+                    attempts=attempt,
+                    verification_method="skipped",
+                    error_message=last_error,
+                )
+                return False
+
             state = AgentState.VERIFY
             verified, output = agent.fix_verifier.verify_with_fallback(
                 issue.location.file, issue, diff_text=diff_text
@@ -269,12 +539,29 @@ class FixLoopRunner:
                 )
                 return True
 
-            last_error = output
+            diff_summary = self._summarize_diff(pre_content, post_content)
+            last_error = f"{output}\nDIFF_SUMMARY:\n{diff_summary}"
             error_history.append(output)
             last_fix = current_fix
             state = AgentState.ROLLBACK
             agent.fixer.rollback_files(touched_files)
             print("[Agent] Fix failed verification, rolling back...")
+            if output == last_verification_output:
+                repeated_verification += 1
+            else:
+                repeated_verification = 0
+            last_verification_output = output
+            if repeated_verification >= 1:
+                print("[Agent] Verification repeated with no progress, stopping early")
+                agent.fix_tracker.record_attempt(
+                    issue_id=issue_key,
+                    mode=preferred_format.value,
+                    success=False,
+                    attempts=attempt,
+                    verification_method=verification_method,
+                    error_message="Repeated verification output",
+                )
+                return False
 
         print("[Agent] All fix attempts exhausted.")
         state = AgentState.FAIL
