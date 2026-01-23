@@ -284,6 +284,8 @@ class FixLoopRunner:
         if self._is_architectural_issue(issue.description):
             print("[Agent] Architectural issue detected; skipping auto-fix.")
             self._append_mitigation_to_report()
+            agent.last_fix_status = "SKIPPED"
+            agent.last_fix_reason = "Architectural issue"
             return True
 
         state = AgentState.VALIDATE_ISSUE
@@ -318,17 +320,23 @@ class FixLoopRunner:
                     agent._write_run_file(
                         run_dir, "final_state.txt", "RESOLVED_BY_PREVIOUS_PATCH"
                     )
+                    agent.last_fix_status = "SKIPPED"
+                    agent.last_fix_reason = "Resolved by previous patch"
                     return True
                 else:
                     print("[Agent] Issue location is stale; skipping.")
                     agent._write_run_file(
                         run_dir, "final_state.txt", "STALE_LOCATION"
                     )
+                    agent.last_fix_status = "SKIPPED"
+                    agent.last_fix_reason = "Stale location"
                     return True
             else:
                 print(f"[Agent] Issue is not actionable: {reason}")
             if not is_valid:
                 agent._write_run_file(run_dir, "final_state.txt", state.value)
+                agent.last_fix_status = "FAILED"
+                agent.last_fix_reason = reason
                 return False
 
         last_error: Optional[str] = None
@@ -713,6 +721,8 @@ class FixLoopRunner:
                 agent.last_fix_summary = self._summarize_diff(pre_content, post_content)
                 agent.last_fix_attempts = attempt
                 agent.last_verification_output = output
+                agent.last_fix_status = "FIXED"
+                agent.last_fix_reason = ""
                 agent.fix_tracker.record_attempt(
                     issue_id=issue_key,
                     mode=preferred_format.value,
@@ -751,6 +761,8 @@ class FixLoopRunner:
         print("[Agent] All fix attempts exhausted.")
         state = AgentState.FAIL
         agent._write_run_file(run_dir, "final_state.txt", state.value)
+        agent.last_fix_status = "FAILED"
+        agent.last_fix_reason = error_history[-1] if error_history else ""
         agent.fix_tracker.record_attempt(
             issue_id=issue_key,
             mode=preferred_format.value,

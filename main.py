@@ -348,6 +348,8 @@ def fix(issue_id: int):
         patch_log = []
         remaining = []
         found_total = 0
+        issue_status = {}
+        issue_details = {}
 
         for pass_idx in range(1, max_passes + 1):
             try:
@@ -392,6 +394,11 @@ def fix(issue_id: int):
 
             diff_text = meta.get("diff_text")
             for issue_data in issues_sorted:
+                issue_id = issue_data.get("id")
+                if issue_id:
+                    issue_details[issue_id] = issue_data
+                if issue_id and issue_status.get(issue_id, {}).get("status") == "FIXED":
+                    continue
                 if meta.get("changed_ranges"):
                     file_path = issue_data.get("location", {}).get("file")
                     if file_path:
@@ -409,7 +416,11 @@ def fix(issue_id: int):
                             f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]"
                         )
 
-                if success:
+                status = agent.last_fix_status or ("FIXED" if success else "FAILED")
+                reason = agent.last_fix_reason
+                if issue.id:
+                    issue_status[issue.id] = {"status": status, "reason": reason}
+                if status == "FIXED":
                     fixed.append(
                         {
                             "id": issue.id or "",
@@ -420,6 +431,16 @@ def fix(issue_id: int):
                             "description": issue.description,
                         }
                     )
+                    patch_log.append(
+                        {
+                            "id": issue.id or "",
+                            "description": issue.description,
+                            "attempts": agent.last_fix_attempts,
+                            "verification": agent.last_verification_output,
+                            "diff_summary": agent.last_fix_summary,
+                        }
+                    )
+                elif status == "SKIPPED":
                     patch_log.append(
                         {
                             "id": issue.id or "",
@@ -444,13 +465,19 @@ def fix(issue_id: int):
                 remaining = []
 
         fixed_count = len(fixed)
-        remaining_count = len(remaining)
+        failed = [iid for iid, meta in issue_status.items() if meta["status"] == "FAILED"]
+        skipped = [iid for iid, meta in issue_status.items() if meta["status"] == "SKIPPED"]
+        remaining_count = len(
+            [iid for iid, meta in issue_status.items() if meta["status"] not in {"FIXED", "SKIPPED"}]
+        )
         summary_lines = [
             "# Fix Summary",
             "",
             f"- Found: {found_total}",
             f"- Fixed: {fixed_count}",
-            f"- Remaining: {remaining_count}",
+            f"- Failed: {len(failed)}",
+            f"- Skipped: {len(skipped)}",
+            f"- Remaining actionable: {remaining_count}",
             "",
             "## Fixed Issues",
         ]
@@ -464,12 +491,45 @@ def fix(issue_id: int):
         else:
             summary_lines.append("- None")
         summary_lines.append("")
+        summary_lines.append("## Failed Issues")
+        if failed:
+            for issue_id in failed:
+                item = issue_details.get(issue_id, {})
+                loc = item.get("location") or {}
+                reason = issue_status.get(issue_id, {}).get("reason", "")
+                summary_lines.append(
+                    f"- {issue_id} {item.get('severity','')} "
+                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+                )
+                if reason:
+                    summary_lines.append(f"  - Last error: {reason}")
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## Skipped Issues")
+        if skipped:
+            for issue_id in skipped:
+                item = issue_details.get(issue_id, {})
+                loc = item.get("location") or {}
+                reason = issue_status.get(issue_id, {}).get("reason", "")
+                summary_lines.append(
+                    f"- {issue_id} {item.get('severity','')} "
+                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+                )
+                if reason:
+                    summary_lines.append(f"  - Reason: {reason}")
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
         summary_lines.append("## Remaining Issues")
-        if remaining:
-            for item in remaining:
+        if remaining_count:
+            for issue_id, meta in issue_status.items():
+                if meta["status"] in {"FIXED", "SKIPPED"}:
+                    continue
+                item = issue_details.get(issue_id, {})
                 loc = item.get("location") or {}
                 summary_lines.append(
-                    f"- {item.get('id','')} {item.get('severity','')} "
+                    f"- {issue_id} {item.get('severity','')} "
                     f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
                 )
         else:
@@ -496,15 +556,64 @@ def fix(issue_id: int):
         issues_final = {
             "found": found_total,
             "fixed": fixed_count,
-            "remaining": remaining_count,
+            "failed": len(failed),
+            "skipped": len(skipped),
+            "remaining_actionable": remaining_count,
             "fixed_issues": fixed,
             "remaining_issues": remaining,
+            "failed_issues": failed,
+            "skipped_issues": skipped,
             "patch_log": patch_log,
         }
         with open("issues_final.json", "w", encoding="utf-8") as f:
             json.dump(issues_final, f, indent=2)
+
+        _print_consolidated_issues_console(issue_details, issue_status)
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
+
+
+def _print_consolidated_issues_console(issue_details: dict, issue_status: dict) -> None:
+    if not issue_details:
+        print("\nConsolidated Issues: 0 actionable remaining")
+        print("- None")
+        return
+    grouped = {"security": [], "logic": [], "performance": []}
+    for issue_id, issue in issue_details.items():
+        issue_type = (issue.get("type") or "").lower()
+        status_meta = issue_status.get(issue_id, {"status": "FAILED", "reason": ""})
+        entry = {"issue": issue, "status": status_meta}
+        if issue_type in grouped:
+            grouped[issue_type].append(entry)
+
+    remaining_actionable = sum(
+        1
+        for meta in issue_status.values()
+        if meta.get("status") not in {"FIXED", "SKIPPED"}
+    )
+    print(
+        f"\nConsolidated Issues: {remaining_actionable} actionable remaining"
+    )
+    for issue_type, entries in grouped.items():
+        print(f"- {issue_type.capitalize()}:")
+        if not entries:
+            print("  - None")
+            continue
+        for entry in entries:
+            issue = entry["issue"]
+            status = entry["status"].get("status", "FAILED")
+            reason = entry["status"].get("reason", "")
+            loc = issue.get("location") or {}
+            title = (issue.get("description") or "").split("\n")[0]
+            line = loc.get("line") or ""
+            func = loc.get("function") or ""
+            status_text = status
+            if reason:
+                status_text = f"{status} ({reason})"
+            print(
+                f"  - {issue.get('severity','')} {loc.get('file','')}:{line} "
+                f"{func} {title} [{status_text}]"
+            )
 
 @app.command()
 def evaluate(
