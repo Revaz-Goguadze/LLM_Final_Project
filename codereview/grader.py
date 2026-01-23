@@ -1,7 +1,10 @@
 import json
 import re
-from typing import Any, List, Dict
+import hashlib
+from typing import Any, List, Dict, Optional
 from collections import defaultdict
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import lru_cache
 from openai import OpenAI
 from .models import GraderReport, FinalReport, BugIssue
 from .config import (
@@ -19,9 +22,55 @@ from .config import (
     MODEL_GRADER_PERF_OPTIONS,
     ENABLE_DEDUPLICATION,
     DEDUPLICATION_LINE_THRESHOLD,
+    ENABLE_PARALLEL_GRADING,
 )
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
+
+
+class LLMCache:
+    """Simple LRU cache for LLM responses based on prompt hash."""
+
+    def __init__(self, max_size: int = 1000):
+        self.max_size = max_size
+        self._cache: Dict[str, str] = {}
+        self._keys: List[str] = []
+
+    def _hash_key(self, prompt: str, model: str) -> str:
+        """Generate a hash key for the cache."""
+        content = f"{model}:{prompt}"
+        return hashlib.sha256(content.encode()).hexdigest()
+
+    def get(self, prompt: str, model: str) -> Optional[str]:
+        """Get cached response if available."""
+        key = self._hash_key(prompt, model)
+        if key in self._cache:
+            # Move to end (most recently used)
+            self._keys.remove(key)
+            self._keys.append(key)
+            return self._cache[key]
+        return None
+
+    def put(self, prompt: str, model: str, response: str) -> None:
+        """Cache a response."""
+        key = self._hash_key(prompt, model)
+        if key in self._cache:
+            self._keys.remove(key)
+        elif len(self._keys) >= self.max_size:
+            # Remove least recently used
+            oldest = self._keys.pop(0)
+            del self._cache[oldest]
+        self._cache[key] = response
+        self._keys.append(key)
+
+    def clear(self) -> None:
+        """Clear the cache."""
+        self._cache.clear()
+        self._keys.clear()
+
+
+# Global cache instance
+_llm_cache = LLMCache(max_size=1000)
 
 
 class MultiLLMGrader:
@@ -239,6 +288,21 @@ Code to analyze:
     def grade_with_model(self, role: str, model_id: str, code: str) -> GraderReport:
         prompt = self._get_grading_prompt(role, code)
 
+        # Check cache first
+        cached_content = _llm_cache.get(prompt, model_id)
+        if cached_content is not None:
+            try:
+                data = self._safe_json_loads(cached_content)
+                data = self._coerce_grader_payload(data)
+                data["grader_id"] = (
+                    f"{role}_{model_id.split('/')[-1].split(':')[0] if '/' in model_id else model_id}"
+                )
+                print(f"[CACHE HIT] Using cached response for {role} grader")
+                return GraderReport(**data)
+            except Exception:
+                # Cache invalid, proceed with API call
+                pass
+
         try:
             content = ""
             data = None
@@ -265,6 +329,8 @@ Code to analyze:
 
                 try:
                     data = self._safe_json_loads(content)
+                    # Cache the successful response
+                    _llm_cache.put(prompt, model_id, content)
                     break
                 except ValueError as e:
                     if attempt < LLM_MAX_RETRIES - 1:
@@ -306,6 +372,22 @@ Code to analyze:
             f"Reports:\n{all_reports_text}"
         )
 
+        # Check cache first
+        cached_content = _llm_cache.get(prompt, MODEL_JUDGE)
+        if cached_content is not None:
+            try:
+                data = self._safe_json_loads(cached_content)
+                data = self._coerce_final_payload(data)
+                # Apply deduplication to consolidated issues
+                consolidated_issues = data.get("consolidated_issues", [])
+                deduped_issues = self._deduplicate_issues(consolidated_issues)
+                data["consolidated_issues"] = deduped_issues
+                print("[CACHE HIT] Using cached response for Final Judge")
+                return FinalReport(**data)
+            except Exception:
+                # Cache invalid, proceed with API call
+                pass
+
         try:
             content = ""
             for attempt in range(LLM_MAX_RETRIES):
@@ -322,6 +404,8 @@ Code to analyze:
                         raise ValueError("No response choices returned")
                     content = response.choices[0].message.content
                 if content:
+                    # Cache the successful response
+                    _llm_cache.put(prompt, MODEL_JUDGE, content)
                     break
                 backoff_sleep(attempt)
 
@@ -342,3 +426,42 @@ Code to analyze:
                 overall_health_score=0,
                 summary=f"Judgment failed: {e}",
             )
+
+    def grade_all_parallel(
+        self,
+        code: str,
+        security_model: str,
+        logic_model: str,
+        perf_model: str,
+    ) -> List[GraderReport]:
+        """Grade code with all three graders in parallel for speed."""
+        if not ENABLE_PARALLEL_GRADING:
+            # Fall back to sequential
+            return [
+                self.grade_with_model("security", security_model, code),
+                self.grade_with_model("logic", logic_model, code),
+                self.grade_with_model("performance", perf_model, code),
+            ]
+
+        results = {}
+        with ThreadPoolExecutor(max_workers=3) as executor:
+            futures = {
+                executor.submit(self.grade_with_model, "security", security_model, code): "security",
+                executor.submit(self.grade_with_model, "logic", logic_model, code): "logic",
+                executor.submit(self.grade_with_model, "performance", perf_model, code): "performance",
+            }
+            for future in as_completed(futures):
+                role = futures[future]
+                try:
+                    results[role] = future.result()
+                except Exception as e:
+                    print(f"Error in {role} grader: {e}")
+                    results[role] = GraderReport(
+                        grader_id=f"{role}_error",
+                        issues=[],
+                        best_practices_violations=[],
+                        overall_score=0,
+                        summary=f"Error: {e}",
+                    )
+
+        return [results["security"], results["logic"], results["performance"]]

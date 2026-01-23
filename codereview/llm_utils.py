@@ -1,21 +1,24 @@
 import time
+import threading
 
 
 class RateLimiter:
-    """Simple per-process rate limiter with a minimum delay between calls."""
+    """Thread-safe rate limiter with a minimum delay between calls."""
 
     def __init__(self, min_delay_seconds: float):
         self.min_delay_seconds = max(0.0, min_delay_seconds)
         self._last_call = 0.0
+        self._lock = threading.Lock()
 
     def wait(self) -> None:
         if self.min_delay_seconds <= 0:
             return
-        now = time.monotonic()
-        elapsed = now - self._last_call
-        if elapsed < self.min_delay_seconds:
-            time.sleep(self.min_delay_seconds - elapsed)
-        self._last_call = time.monotonic()
+        with self._lock:
+            now = time.monotonic()
+            elapsed = now - self._last_call
+            if elapsed < self.min_delay_seconds:
+                time.sleep(self.min_delay_seconds - elapsed)
+            self._last_call = time.monotonic()
 
 
 def should_retry(error_text: str) -> bool:

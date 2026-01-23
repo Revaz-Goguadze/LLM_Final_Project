@@ -61,6 +61,10 @@ DOCS_BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "docs_index.pkl")
 SEMANTIC_TOP_K = 8
 BM25_TOP_K = 8
 HYBRID_ALPHA = 0.6
+ENABLE_HYDE = os.getenv("ENABLE_HYDE", "false").lower() in ("1", "true", "yes")  # Disabled by default for speed
+
+# Performance settings
+ENABLE_PARALLEL_GRADING = os.getenv("ENABLE_PARALLEL_GRADING", "true").lower() in ("1", "true", "yes")
 
 # Settings
 MAX_FIX_RETRIES = 3
@@ -68,8 +72,9 @@ CONTEXT_WINDOW_REDUCTION_SUMMARY = True
 VERIFY_COMMAND = os.getenv("VERIFY_COMMAND", "pytest")
 EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "openai")
 OPENAI_EMBEDDING_MODEL = os.getenv("OPENAI_EMBEDDING_MODEL", "text-embedding-3-small")
-OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
-LLM_MIN_DELAY = float(os.getenv("LLM_MIN_DELAY", "1.2"))
+OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "120"))  # Increased for slower APIs
+# Reduced delay - most APIs can handle faster requests
+LLM_MIN_DELAY = float(os.getenv("LLM_MIN_DELAY", "0.1"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 ALLOW_FIX_PATCH = os.getenv("ALLOW_FIX_PATCH", "false").lower() in ("1", "true", "yes")
 
