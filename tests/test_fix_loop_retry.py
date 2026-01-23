@@ -57,6 +57,15 @@ class DummyFixer:
         path = Path(file_path)
         self.backups[file_path] = path.read_text(encoding="utf-8")
         lines = self.backups[file_path].splitlines()
+        if is_patch:
+            if "+b = 2" in fix_content:
+                lines[1] = "b = 2"
+            elif "+b = 3" in fix_content:
+                lines[1] = "b = 3"
+            else:
+                return False, []
+            path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            return True, [file_path]
         if start_line is None or end_line is None:
             return False, []
         replacement_lines = fix_content.splitlines()
@@ -100,31 +109,40 @@ class DummyAgent:
     def _format_fix_context(self, fix_context):
         return fix_context.file_context
 
-    def _generate_fix(self, issue, file_context, previous_error, extra_context):
+    def _generate_fix(self, issue, file_context, previous_error, extra_context, patch_only=False):
         self._attempt += 1
         prompt = f"{previous_error or ''}\n{extra_context or ''}"
         self._prompts.append(prompt)
         if self._attempt == 1:
-            payload = {
-                "format": "replace",
-                "start_line": issue.location.line,
-                "end_line": issue.location.line,
-                "replacement": "b = 2",
-            }
+            patch = (
+                "diff --git a/sample.py b/sample.py\n"
+                "--- a/sample.py\n"
+                "+++ b/sample.py\n"
+                "@@ -2 +2 @@\n"
+                "-b = 1\n"
+                "+b = 2\n"
+            )
         else:
-            payload = {
-                "format": "replace",
-                "start_line": issue.location.line,
-                "end_line": issue.location.line,
-                "replacement": "b = 3",
-            }
-        return prompt, json.dumps(payload)
+            patch = (
+                "diff --git a/sample.py b/sample.py\n"
+                "--- a/sample.py\n"
+                "+++ b/sample.py\n"
+                "@@ -2 +2 @@\n"
+                "-b = 1\n"
+                "+b = 3\n"
+            )
+        return prompt, patch
 
     def _parse_fix_payload(self, content):
-        return json.loads(content)
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            return {}
 
     def _validate_fix_payload(self, issue, payload, diff_text=None, expected_format=None):
-        return True, "", payload
+        if payload.get("format") == "patch":
+            return True, "", payload
+        return True, "", {"format": "patch", "patch": payload.get("patch", "")}
 
     def _read_file_lines(self, file_path):
         return Path(file_path).read_text(encoding="utf-8").splitlines(keepends=True)

@@ -101,13 +101,19 @@ def analyze(
     docs_top_k: int = typer.Option(5, "--docs-top-k"),
     show_context: bool = typer.Option(False, "--show-context"),
     context_out: str = typer.Option(None, "--context-out"),
+    changed_only: bool = typer.Option(False, "--changed-only"),
+    base_ref: str = typer.Option("HEAD~1", "--base-ref"),
 ):
     """Analyze changes for bugs and bad practices."""
     print("[bold blue]Starting analysis...[/bold blue]")
     
     target_diff = ""
     diff_type = "changes"
-    if path:
+    if changed_only:
+        analyzer = GitAnalyzer()
+        target_diff = analyzer.get_diff_against(base_ref)
+        diff_type = f"changes since {base_ref}"
+    elif path:
         target_paths = _read_target_files(path)
         target_diff = _build_snapshot(target_paths)
         diff_type = f"files under {path}"
@@ -136,6 +142,23 @@ def analyze(
 
     print(f"[blue]Analyzing {diff_type}...[/blue]")
 
+    changed_ranges = {}
+    changed_files = []
+    if changed_only and target_diff:
+        from codereview.diff_utils import parse_changed_lines, lines_to_ranges
+        from codereview.diff_utils import parse_unified_diff_files
+        from codereview.config import DEMO_EXCLUDE_PREFIXES
+        changed_lines = parse_changed_lines(target_diff)
+        for file_path, lines in changed_lines.items():
+            changed_ranges[file_path] = lines_to_ranges(lines)
+        changed_files = parse_unified_diff_files(target_diff)
+        if DEMO_EXCLUDE_PREFIXES:
+            changed_files = [
+                path
+                for path in changed_files
+                if not any(path.startswith(prefix) for prefix in DEMO_EXCLUDE_PREFIXES)
+            ]
+
     rag_query = build_rag_query(query, target_diff)
     if not rag_query:
         rag_query = target_diff[:2000]
@@ -146,6 +169,11 @@ def analyze(
         print("[blue]RAG #1: Retrieving related code from indexed codebase...[/blue]")
         try:
             from codereview.retriever import HybridRetriever
+            if changed_only and changed_files:
+                from codereview.indexer import CodebaseIndexer
+                indexer = CodebaseIndexer()
+                for file_path in changed_files:
+                    indexer.index_file(file_path)
             code_retriever = HybridRetriever()
             related_chunks = code_retriever.search(rag_query, n_results=top_k)
             code_context = build_context_block(related_chunks)
@@ -281,6 +309,11 @@ def analyze(
                 "path": path,
                 "use_rag": use_rag,
                 "use_docs_rag": use_docs_rag,
+                "changed_only": changed_only,
+                "base_ref": base_ref,
+                "changed_ranges": changed_ranges,
+                "code_context": code_context,
+                "docs_context": docs_context,
             },
             f,
             indent=2,
@@ -322,6 +355,10 @@ def fix(issue_id: int):
                     meta = json.load(f)
             except FileNotFoundError:
                 meta = {}
+            agent.context_cache = {
+                "code_context": meta.get("code_context", ""),
+                "docs_context": meta.get("docs_context", ""),
+            }
 
             analyze(
                 staged=False,
@@ -331,6 +368,8 @@ def fix(issue_id: int):
                 query=meta.get("query"),
                 use_rag=meta.get("use_rag", True),
                 use_docs_rag=meta.get("use_docs_rag", True),
+                changed_only=meta.get("changed_only", False),
+                base_ref=meta.get("base_ref", "HEAD~1"),
             )
 
             with open("bug_report.json", "r") as f:
@@ -342,32 +381,58 @@ def fix(issue_id: int):
                 remaining = []
                 break
 
-            issue_data = issues[0] if fix_everything else issues[issue_id]
-            issue = BugIssue(**issue_data)
+            severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+            issues_sorted = sorted(
+                issues,
+                key=lambda item: (
+                    severity_order.get(str(item.get("severity", "")).lower(), 9),
+                    (item.get("location") or {}).get("file", ""),
+                ),
+            )
 
             diff_text = meta.get("diff_text")
-            success = agent.solve_issue(issue, diff_text=diff_text)
-            if success and issue.location and issue.location.file:
-                file_path = issue.location.file
-                update_report_for_file("bug_report.json", file_path)
-                try:
-                    CodebaseIndexer().index_file(resolve_repo_path(file_path))
-                except Exception as exc:
-                    print(f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]")
+            for issue_data in issues_sorted:
+                if meta.get("changed_ranges"):
+                    file_path = issue_data.get("location", {}).get("file")
+                    if file_path:
+                        ranges = meta.get("changed_ranges", {}).get(file_path, [])
+                        issue_data["changed_ranges"] = ranges
+                issue = BugIssue(**issue_data)
+                success = agent.solve_issue(issue, diff_text=diff_text)
+                if success and issue.location and issue.location.file:
+                    file_path = issue.location.file
+                    update_report_for_file("bug_report.json", file_path)
+                    try:
+                        CodebaseIndexer().index_file(resolve_repo_path(file_path))
+                    except Exception as exc:
+                        print(
+                            f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]"
+                        )
 
-            if success:
-                fixed.append(issue.description)
-                patch_log.append(
-                    {
-                        "description": issue.description,
-                        "attempts": agent.last_fix_attempts,
-                        "verification": agent.last_verification_output,
-                        "diff_summary": agent.last_fix_summary,
-                    }
-                )
+                if success:
+                    fixed.append(
+                        {
+                            "id": issue.id or "",
+                            "severity": issue.severity,
+                            "file": (issue.location.file if issue.location else ""),
+                            "line": (issue.location.line if issue.location else ""),
+                            "description": issue.description,
+                        }
+                    )
+                    patch_log.append(
+                        {
+                            "id": issue.id or "",
+                            "description": issue.description,
+                            "attempts": agent.last_fix_attempts,
+                            "verification": agent.last_verification_output,
+                            "diff_summary": agent.last_fix_summary,
+                        }
+                    )
+                else:
+                    remaining = issues
+                    break
             else:
-                remaining = issues
-                break
+                remaining = []
 
         if not remaining:
             try:
@@ -389,15 +454,22 @@ def fix(issue_id: int):
             "## Fixed Issues",
         ]
         if fixed:
-            summary_lines.extend([f"- {desc}" for desc in fixed])
+            for item in fixed:
+                summary_lines.append(
+                    f"- {item['id']} {item['severity']} "
+                    f"{item['file']}:{item['line']}: {item['description']}"
+                )
         else:
             summary_lines.append("- None")
         summary_lines.append("")
         summary_lines.append("## Remaining Issues")
         if remaining:
-            summary_lines.extend(
-                [f"- {item.get('description', 'unknown')}" for item in remaining]
-            )
+            for item in remaining:
+                loc = item.get("location") or {}
+                summary_lines.append(
+                    f"- {item.get('id','')} {item.get('severity','')} "
+                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+                )
         else:
             summary_lines.append("- None")
         summary_lines.append("")
@@ -405,7 +477,7 @@ def fix(issue_id: int):
         if patch_log:
             for entry in patch_log:
                 summary_lines.append(
-                    f"- {entry['description']} (attempts: {entry['attempts']})"
+                    f"- {entry.get('id','')} {entry['description']} (attempts: {entry['attempts']})"
                 )
                 if entry["diff_summary"]:
                     summary_lines.append("```diff")
@@ -415,6 +487,17 @@ def fix(issue_id: int):
             summary_lines.append("- None")
         with open("bug_report.md", "w", encoding="utf-8") as f:
             f.write("\n".join(summary_lines))
+
+        issues_final = {
+            "found": found_total,
+            "fixed": fixed_count,
+            "remaining": remaining_count,
+            "fixed_issues": fixed,
+            "remaining_issues": remaining,
+            "patch_log": patch_log,
+        }
+        with open("issues_final.json", "w", encoding="utf-8") as f:
+            json.dump(issues_final, f, indent=2)
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
 

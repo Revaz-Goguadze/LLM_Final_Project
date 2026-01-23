@@ -69,6 +69,11 @@ OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
 LLM_MIN_DELAY = float(os.getenv("LLM_MIN_DELAY", "1.2"))
 LLM_MAX_RETRIES = int(os.getenv("LLM_MAX_RETRIES", "3"))
 ALLOW_FIX_PATCH = os.getenv("ALLOW_FIX_PATCH", "false").lower() in ("1", "true", "yes")
+DEMO_EXCLUDE_PREFIXES = [
+    prefix.strip()
+    for prefix in os.getenv("DEMO_EXCLUDE_PREFIXES", "").split(",")
+    if prefix.strip()
+]
 
 
 def missing_api_keys() -> list[str]:

@@ -148,8 +148,8 @@ class FixLoopRunner:
             issue.line_text = lines[line_no - 1].rstrip("\n")
             return
         if issue.location.line:
-            start_line = max(1, issue.location.line - 30)
-            end_line = min(len(lines), issue.location.line + 30)
+            start_line = max(1, issue.location.line - 40)
+            end_line = min(len(lines), issue.location.line + 40)
             issue.start_line = start_line
             issue.end_line = end_line
 
@@ -427,6 +427,7 @@ class FixLoopRunner:
                 attempt=attempt,
                 previous_error=last_error,
                 context_multiplier=context_multiplier,
+                context_cache=getattr(agent, "context_cache", None),
             )
             context_text = agent._format_fix_context(fix_context)
             if verification_context:
@@ -489,6 +490,7 @@ class FixLoopRunner:
                 fix_context.file_context,
                 last_error,
                 context_text,
+                patch_only=True,
             )
             agent._write_run_file(run_dir, f"attempt_{attempt}_prompt.txt", prompt)
             agent._write_run_file(run_dir, f"attempt_{attempt}_raw_llm.txt", raw_fix)
@@ -543,6 +545,7 @@ class FixLoopRunner:
                     fix_context.file_context,
                     reason,
                     repair_context,
+                    patch_only=True,
                 )
                 agent._write_run_file(
                     run_dir, f"attempt_{attempt}_repair_prompt.txt", prompt

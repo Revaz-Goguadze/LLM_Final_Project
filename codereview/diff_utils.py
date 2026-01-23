@@ -68,3 +68,21 @@ def parse_changed_lines(diff_text: str) -> Dict[str, Set[int]]:
         else:
             current_line += 1
     return changed
+
+
+def lines_to_ranges(lines: Set[int]) -> List[tuple[int, int]]:
+    if not lines:
+        return []
+    sorted_lines = sorted(lines)
+    ranges = []
+    start = sorted_lines[0]
+    prev = start
+    for line in sorted_lines[1:]:
+        if line == prev + 1:
+            prev = line
+            continue
+        ranges.append((start, prev))
+        start = line
+        prev = line
+    ranges.append((start, prev))
+    return ranges

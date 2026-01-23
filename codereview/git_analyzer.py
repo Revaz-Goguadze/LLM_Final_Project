@@ -1,6 +1,7 @@
 import os
 from git import Repo
 from .models import GitDiff
+from .config import DEMO_EXCLUDE_PREFIXES
 
 class GitAnalyzer:
     def __init__(self, repo_path: str = "."):
@@ -19,6 +20,8 @@ class GitAnalyzer:
             ".env",
             ".pytest_cache/",
         )
+        if DEMO_EXCLUDE_PREFIXES:
+            self._ignore_prefixes = self._ignore_prefixes + tuple(DEMO_EXCLUDE_PREFIXES)
 
     def get_diffs(self) -> GitDiff:
         """Extracts staged, unstaged and last commit diffs."""
@@ -59,6 +62,23 @@ class GitAnalyzer:
             last_commit=last_commit_diff,
             changed_files=changed_files
         )
+
+    def get_diff_against(self, base_ref: str) -> str:
+        excludes = [
+            "--",
+            ".",
+            ":(exclude,glob).bm25/**",
+            ":(exclude,glob).vector_store/**",
+            ":(exclude,glob).chroma/**",
+            ":(exclude,glob)**/__pycache__/**",
+            ":(exclude,glob)bug_report*",
+            ":(exclude,glob).env",
+            ":(exclude,glob).pytest_cache/**",
+        ]
+        try:
+            return self.repo.git.diff(base_ref, "HEAD", *excludes)
+        except Exception:
+            return ""
 
     def _get_files_from_diff(self, diff_text: str) -> list:
         files = []

@@ -15,7 +15,9 @@ class BugIssue(BaseModel):
     evidence: str
     suggested_fix: str
     confidence: float
+    id: Optional[str] = None
     evidence_snippet: Optional[str] = None
+    changed_ranges: Optional[List[List[int]]] = None
     start_line: Optional[int] = None
     end_line: Optional[int] = None
     line_text: Optional[str] = None

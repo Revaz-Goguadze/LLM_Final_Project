@@ -68,6 +68,10 @@ class CodebaseIndexer:
         )
         print(f"Indexed {len(chunks)} chunks from {file_path}")
 
+    def reindex_file(self, file_path: str):
+        """Re-index a single file (alias for index_file)."""
+        self.index_file(file_path)
+
 if __name__ == "__main__":
     indexer = CodebaseIndexer()
     # Index the codereview package itself as a test

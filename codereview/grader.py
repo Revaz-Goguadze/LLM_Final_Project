@@ -1,5 +1,6 @@
 import json
 import re
+import hashlib
 from typing import Any, List, Dict
 from collections import defaultdict
 from openai import OpenAI
@@ -23,6 +24,7 @@ from .config import (
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
 from .path_utils import normalize_repo_path
+from .path_utils import resolve_repo_path
 
 
 class MultiLLMGrader:
@@ -259,8 +261,50 @@ Code to analyze:
                     location["line"] = int(line)
                 issue_dict["location"] = location
 
+            evidence = str(issue_dict.get("evidence", "") or "").strip()
+            if not evidence:
+                snippet = self._extract_evidence_snippet(issue_dict)
+                if snippet:
+                    issue_dict["evidence"] = snippet
+                    issue_dict["evidence_snippet"] = snippet
+            elif not issue_dict.get("evidence_snippet"):
+                issue_dict["evidence_snippet"] = evidence
+
+            issue_id = issue_dict.get("id")
+            if not issue_id:
+                location = issue_dict.get("location") or {}
+                key = "|".join(
+                    [
+                        str(location.get("file", "")),
+                        str(location.get("function", "")),
+                        str(issue_dict.get("evidence", "")),
+                    ]
+                )
+                issue_id = hashlib.sha256(key.encode("utf-8")).hexdigest()[:12]
+                issue_dict["id"] = issue_id
+
             normalized.append(issue_dict)
         return normalized
+
+    @staticmethod
+    def _extract_evidence_snippet(issue_dict: Dict[str, Any]) -> str:
+        location = issue_dict.get("location") or {}
+        file_path = normalize_repo_path(str(location.get("file", "")).strip())
+        if not file_path:
+            return ""
+        abs_path = resolve_repo_path(file_path)
+        try:
+            with open(abs_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except OSError:
+            return ""
+        line_no = location.get("line")
+        if not isinstance(line_no, int) or line_no < 1 or line_no > len(lines):
+            return ""
+        snippet = [lines[line_no - 1].rstrip("\n")]
+        if line_no < len(lines):
+            snippet.append(lines[line_no].rstrip("\n"))
+        return "\n".join(snippet)
 
     def _coerce_final_payload(self, payload: Any) -> dict:
         if isinstance(payload, list) and payload:

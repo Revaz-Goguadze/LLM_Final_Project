@@ -31,6 +31,7 @@ class FixContextBuilder:
         attempt: int = 1,
         previous_error: Optional[str] = None,
         context_multiplier: float = 1.0,
+        context_cache: Optional[dict] = None,
     ) -> FixContext:
         """
         Build comprehensive fix context using dual-RAG and file analysis.
@@ -46,13 +47,30 @@ class FixContextBuilder:
             issue.location.file, issue.location.line or 1, context_radius
         )
 
-        # 2. Always search code RAG
-        code_rag = self._search_code_rag(issue, attempt, previous_error)
+        # 2. Always search code RAG unless cached
+        code_rag = []
+        if context_cache and context_cache.get("code_context"):
+            code_rag = [
+                {
+                    "content": context_cache.get("code_context", ""),
+                    "metadata": {"title": "cached_code_context"},
+                }
+            ]
+        else:
+            code_rag = self._search_code_rag(issue, attempt, previous_error)
 
         # 3. Search docs RAG if security or best practice issue
         docs_rag = []
         if self._should_read_docs(issue):
-            docs_rag = self._search_docs_rag(issue)
+            if context_cache and context_cache.get("docs_context"):
+                docs_rag = [
+                    {
+                        "content": context_cache.get("docs_context", ""),
+                        "metadata": {"title": "cached_docs_context"},
+                    }
+                ]
+            else:
+                docs_rag = self._search_docs_rag(issue)
 
         # 4. Add diff context if available
         diff_context = self._extract_diff_context(diff_text, issue.location.file)

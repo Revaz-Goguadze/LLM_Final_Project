@@ -269,6 +269,24 @@ class ReActAgent:
                 target_line = issue.location.line or 1
                 window_start = max(1, target_line - 20)
                 window_end = target_line + 20
+                if issue.changed_ranges:
+                    within_changed = any(
+                        start <= line <= end
+                        for line in changed_lines
+                        for start, end in issue.changed_ranges
+                    )
+                    within_chunk = False
+                    if issue.chunk_start_line and issue.chunk_end_line:
+                        within_chunk = any(
+                            issue.chunk_start_line <= line <= issue.chunk_end_line
+                            for line in changed_lines
+                        )
+                    if not (within_changed or within_chunk):
+                        return (
+                            False,
+                            "Patch does not touch required changed ranges or target function",
+                            {},
+                        )
                 if issue.chunk_start_line and issue.chunk_end_line:
                     for line in changed_lines:
                         if not (
@@ -378,6 +396,7 @@ class ReActAgent:
         file_context: str,
         previous_error: Optional[str] = None,
         extra_context: Optional[str] = None,
+        patch_only: bool = False,
     ) -> Tuple[str, str]:
         error_context = ""
         if previous_error:
@@ -390,7 +409,23 @@ Generate a DIFFERENT fix that addresses this error.
 
         extra = f"\nADDITIONAL CONTEXT:\n{extra_context}\n" if extra_context else ""
 
-        prompt = f"""You are a code fixing agent. Return a JSON object only.
+        if patch_only:
+            prompt = f"""You are a code fixing agent. Return ONLY a unified diff patch.
+
+BUG: {issue.description}
+FILE: {issue.location.file}
+LINE: {issue.location.line}
+{error_context}
+CURRENT CODE:
+{file_context}
+{extra}
+
+INSTRUCTIONS:
+1. Return a unified diff patch only (diff --git, @@ hunks)
+2. Minimal diff, do not reformat unrelated code
+3. NO markdown, NO code blocks, NO explanations"""
+        else:
+            prompt = f"""You are a code fixing agent. Return a JSON object only.
 
 BUG: {issue.description}
 FILE: {issue.location.file}
