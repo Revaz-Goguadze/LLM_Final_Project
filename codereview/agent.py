@@ -231,11 +231,15 @@ class ReActAgent:
         if not end_line or end_line < start_line:
             return False, "Invalid end_line in payload", {}
 
+        # Allow LLM to propose a range that overlaps with the issue's range
+        # The fixer may need to include additional lines (e.g., orphaned variables)
         if issue.start_line and issue.end_line:
-            if start_line != issue.start_line or end_line != issue.end_line:
+            # Check for overlap: proposed range must include at least the issue's primary line
+            issue_primary = issue.location.line or issue.start_line
+            if not (start_line <= issue_primary <= end_line):
                 return (
                     False,
-                    "Replacement must match the target line range from the report",
+                    f"Replacement range {start_line}-{end_line} must include issue line {issue_primary}",
                     {},
                 )
 

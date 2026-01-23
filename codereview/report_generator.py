@@ -84,10 +84,35 @@ class ReportGenerator:
 
             line_no = corrected_line
             if line_no and line_no > 0:
-                if issue.start_line is None:
+                # Fix start_line/end_line if they don't make sense relative to corrected line
+                # The LLM often returns wrong line numbers, so we correct based on evidence
+                if issue.start_line is None or issue.start_line != line_no:
+                    # If start_line was set but doesn't match corrected line, recalculate
+                    # For SQL injection fixes, typically need 2 lines (query + execute)
+                    old_start = issue.start_line
                     issue.start_line = line_no
-                if issue.end_line is None:
-                    issue.end_line = issue.start_line
+                    if old_start and old_start != line_no:
+                        print(
+                            f"[LINE FIX] Corrected start_line {old_start} -> {line_no}"
+                        )
+                if (
+                    issue.end_line is None
+                    or issue.end_line < issue.start_line
+                    or issue.end_line > issue.start_line + 5
+                ):
+                    old_end = issue.end_line
+                    evidence = issue.evidence or ""
+                    if (
+                        "execute" in evidence.lower()
+                        or "cursor.execute" in str(issue.suggested_fix).lower()
+                    ):
+                        issue.end_line = issue.start_line + 1
+                    else:
+                        issue.end_line = issue.start_line
+                    if old_end and old_end != issue.end_line:
+                        print(
+                            f"[LINE FIX] Corrected end_line {old_end} -> {issue.end_line}"
+                        )
                 if issue.line_text is None:
                     if line_no <= len(lines):
                         issue.line_text = lines[line_no - 1].rstrip("\n")

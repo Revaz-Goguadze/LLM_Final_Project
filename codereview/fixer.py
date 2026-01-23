@@ -1,7 +1,8 @@
 import os
+import re
 import subprocess
 import tempfile
-from typing import Iterable, Optional, Tuple, List
+from typing import Iterable, Optional, Tuple, List, Set
 from .models import BugIssue
 from .config import VERIFY_COMMAND, ALLOW_FIX_PATCH
 from .diff_utils import parse_unified_diff_files
@@ -12,6 +13,51 @@ class CodeFixer:
         self.last_error = ""
         self._backups = {}
         self._allow_patch = ALLOW_FIX_PATCH
+
+    def _extract_defined_variables(self, lines: List[str]) -> Set[str]:
+        """Extract variable names defined in the given lines (simple assignment pattern)."""
+        var_pattern = re.compile(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=\s*")
+        variables = set()
+        for line in lines:
+            match = var_pattern.match(line)
+            if match:
+                variables.add(match.group(1))
+        return variables
+
+    def _find_orphaned_lines(
+        self, lines: List[str], start_idx: int, end_idx: int, replacement: str
+    ) -> int:
+        """Find lines after end_idx that reference variables removed by the replacement.
+
+        Returns the new end_idx that includes orphaned usages.
+        """
+        removed_lines = lines[start_idx:end_idx]
+        defined_vars = self._extract_defined_variables(removed_lines)
+        if not defined_vars:
+            return end_idx
+
+        replacement_vars = self._extract_defined_variables(replacement.splitlines())
+        orphaned_vars = defined_vars - replacement_vars
+        if not orphaned_vars:
+            return end_idx
+
+        var_pattern = re.compile(
+            r"\b(" + "|".join(re.escape(v) for v in orphaned_vars) + r")\b"
+        )
+
+        new_end = end_idx
+        for i in range(end_idx, min(end_idx + 5, len(lines))):
+            line = lines[i]
+            if var_pattern.search(line):
+                if not re.match(r"^\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*=", line):
+                    new_end = i + 1
+                    print(
+                        f"[Fixer] Extending range to include orphaned reference at line {i + 1}"
+                    )
+            else:
+                break
+
+        return new_end
 
     def _snapshot_file(self, file_path: str) -> None:
         try:
@@ -103,24 +149,27 @@ class CodeFixer:
                 f"Line range {start_line}-{end_line} exceeds file length, using {effective_start}-{effective_end}"
             )
 
+        extended_end = self._find_orphaned_lines(
+            lines, effective_start - 1, effective_end, replacement
+        )
+        if extended_end > effective_end:
+            effective_end = extended_end
+
         original_line = lines[effective_start - 1] if lines else ""
         original_indent = len(original_line) - len(original_line.lstrip())
         indent_str = original_line[:original_indent]
 
-        # Fully dedent the replacement to normalize indentation
         normalized_replacement = textwrap.dedent(replacement).strip("\n")
         replacement_lines = normalized_replacement.splitlines()
         if not replacement_lines:
             self.last_error = "Empty replacement"
             return False
 
-        # Re-indent each line to match the original indentation
         indented_lines = []
         for line in replacement_lines:
             if not line.strip():
                 indented_lines.append("\n")
                 continue
-            # Strip any remaining leading whitespace and add original indent
             indented_lines.append(indent_str + line.lstrip() + "\n")
 
         new_lines = (
@@ -225,9 +274,14 @@ class CodeFixer:
                 # Patch detected but not explicitly requested and not allowed by config
                 return False, touched_files
 
-        # Non-patch path
         touched_files = self._snapshot_files([file_path])
-        if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
+
+        is_single_line = (
+            start_line is None or end_line is None or start_line == end_line
+        )
+        if is_single_line and self._apply_simple_replace(
+            file_path, issue.evidence or "", fix_content
+        ):
             return True, touched_files
 
         if start_line is None:
