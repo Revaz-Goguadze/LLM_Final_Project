@@ -273,3 +273,93 @@ def test_validate_fix_payload_allows_multiline_within_window(tmp_path, monkeypat
     assert is_valid is True
     assert reason == ""
     assert normalized["start_line"] == 9
+
+
+def test_validate_fix_payload_patch_within_window(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    file_path = Path("sample.py")
+    file_path.write_text(
+        "".join(f"line {i}\n" for i in range(1, 30)),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "sample.py"], check=True, capture_output=True)
+
+    file_path.write_text(
+        "".join(
+            f"line {i}\n" if i != 12 else "line 12 updated\n"
+            for i in range(1, 30)
+        ),
+        encoding="utf-8",
+    )
+    diff = subprocess.run(
+        ["git", "diff", "--no-color"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    patch = diff.stdout
+    if not patch.endswith("\n"):
+        patch += "\n"
+
+    issue = BugIssue(
+        severity="high",
+        type="logic",
+        location=CodeLocation(file="sample.py", line=10, function=""),
+        description="Update line",
+        evidence="line 10",
+        suggested_fix="",
+        confidence=0.9,
+    )
+
+    agent = _make_agent()
+    payload = {"format": "patch", "patch": patch}
+
+    is_valid, reason, _ = agent._validate_fix_payload(issue, payload)
+    assert is_valid is True
+    assert reason == ""
+
+
+def test_validate_fix_payload_patch_outside_window(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    subprocess.run(["git", "init"], check=True, capture_output=True)
+    file_path = Path("sample.py")
+    file_path.write_text(
+        "".join(f"line {i}\n" for i in range(1, 60)),
+        encoding="utf-8",
+    )
+    subprocess.run(["git", "add", "sample.py"], check=True, capture_output=True)
+
+    file_path.write_text(
+        "".join(
+            f"line {i}\n" if i != 50 else "line 50 updated\n"
+            for i in range(1, 60)
+        ),
+        encoding="utf-8",
+    )
+    diff = subprocess.run(
+        ["git", "diff", "--no-color"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    patch = diff.stdout
+    if not patch.endswith("\n"):
+        patch += "\n"
+
+    issue = BugIssue(
+        severity="high",
+        type="logic",
+        location=CodeLocation(file="sample.py", line=5, function=""),
+        description="Update line",
+        evidence="line 5",
+        suggested_fix="",
+        confidence=0.9,
+    )
+
+    agent = _make_agent()
+    payload = {"format": "patch", "patch": patch}
+
+    is_valid, reason, _ = agent._validate_fix_payload(issue, payload)
+    assert is_valid is False
+    assert "allowed window" in reason

@@ -35,9 +35,36 @@ class FixLoopRunner:
             return None
         if issue.chunk_start_line and issue.chunk_end_line and issue.chunk_type == "function":
             return issue.chunk_start_line, issue.chunk_end_line, "function"
+        if issue.location.function and not issue.chunk_start_line:
+            bounds = self._find_function_bounds(issue)
+            if bounds:
+                return bounds[0], bounds[1], "function"
         start = max(1, issue.location.line - self._single_line_window_radius)
         end = issue.location.line + self._single_line_window_radius
         return start, end, "window"
+
+    def _find_function_bounds(self, issue: BugIssue) -> Optional[tuple[int, int]]:
+        lines = self.agent._read_file_lines(issue.location.file)
+        if not lines:
+            return None
+        func_name = issue.location.function.split(".")[-1].strip("()")
+        if not func_name:
+            return None
+        start_idx = None
+        for idx, line in enumerate(lines):
+            stripped = line.lstrip()
+            if stripped.startswith(f"def {func_name}") or stripped.startswith(f"class {func_name}"):
+                start_idx = idx
+                break
+        if start_idx is None:
+            return None
+        end_idx = len(lines) - 1
+        for idx in range(start_idx + 1, len(lines)):
+            stripped = lines[idx].lstrip()
+            if stripped.startswith("def ") or stripped.startswith("class "):
+                end_idx = idx - 1
+                break
+        return start_idx + 1, end_idx + 1
 
     def _ensure_edit_window(self, issue: BugIssue) -> Optional[tuple[int, int, str]]:
         if issue.start_line and issue.end_line and issue.start_line != issue.end_line:
@@ -265,7 +292,7 @@ class FixLoopRunner:
                     ]
                     if part
                 )
-                if last_error == "Repeated fix output":
+                if "DIFF_SUMMARY" in last_error or last_error == "Repeated fix output":
                     retry_instructions = "\n".join(
                         part
                         for part in [
@@ -458,10 +485,16 @@ class FixLoopRunner:
                 continue
 
             if last_fix and current_fix == last_fix:
-                print("[Agent] Fix repeated; requesting a different strategy")
-                last_error = "Repeated fix output"
-                error_history.append(last_error)
-                continue
+                print("[Agent] Fix repeated twice; stopping early due to no progress.")
+                agent.fix_tracker.record_attempt(
+                    issue_id=issue_key,
+                    mode=preferred_format.value,
+                    success=False,
+                    attempts=attempt,
+                    verification_method="skipped",
+                    error_message="Repeated fix output",
+                )
+                return False
 
             start_line = normalized.get("start_line") if not is_patch else None
             end_line = normalized.get("end_line") if not is_patch else None

@@ -22,6 +22,7 @@ from .config import (
 )
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
+from .path_utils import normalize_repo_path
 
 
 class MultiLLMGrader:
@@ -219,6 +220,48 @@ Code to analyze:
             "summary": summary,
         }
 
+    def _normalize_issue_list(self, issues: List[Any], default_type: str) -> List[dict]:
+        allowed_types = {"security", "logic", "performance"}
+        allowed_severities = {"critical", "high", "medium", "low"}
+        normalized = []
+        for issue in issues:
+            if hasattr(issue, "model_dump"):
+                issue_dict = issue.model_dump()
+            elif isinstance(issue, dict):
+                issue_dict = dict(issue)
+            else:
+                continue
+
+            severity = str(issue_dict.get("severity", "")).lower().strip()
+            if severity not in allowed_severities:
+                print(
+                    f"[warn] Invalid severity '{issue_dict.get('severity')}', defaulting to high."
+                )
+                severity = "high"
+            issue_dict["severity"] = severity
+
+            issue_type = str(issue_dict.get("type", "")).lower().strip()
+            if issue_type not in allowed_types:
+                inferred = default_type if default_type in allowed_types else "logic"
+                print(
+                    f"[warn] Invalid issue type '{issue_dict.get('type')}', defaulting to {inferred}."
+                )
+                issue_type = inferred
+            issue_dict["type"] = issue_type
+
+            location = issue_dict.get("location") or {}
+            if isinstance(location, dict):
+                file_path = normalize_repo_path(str(location.get("file", "")).strip())
+                if file_path:
+                    location["file"] = file_path
+                line = location.get("line")
+                if isinstance(line, str) and line.isdigit():
+                    location["line"] = int(line)
+                issue_dict["location"] = location
+
+            normalized.append(issue_dict)
+        return normalized
+
     def _coerce_final_payload(self, payload: Any) -> dict:
         if isinstance(payload, list) and payload:
             payload = payload[0]
@@ -276,6 +319,7 @@ Code to analyze:
                 raise ValueError("Empty response from model")
 
             data = self._coerce_grader_payload(data)
+            data["issues"] = self._normalize_issue_list(data.get("issues", []), role)
             data["grader_id"] = (
                 f"{role}_{model_id.split('/')[-1].split(':')[0] if '/' in model_id else model_id}"
             )
@@ -331,7 +375,9 @@ Code to analyze:
             data = self._safe_json_loads(content)
             data = self._coerce_final_payload(data)
             # Apply deduplication to consolidated issues
-            consolidated_issues = data.get("consolidated_issues", [])
+            consolidated_issues = self._normalize_issue_list(
+                data.get("consolidated_issues", []), "logic"
+            )
             deduped_issues = self._deduplicate_issues(consolidated_issues)
             data["consolidated_issues"] = deduped_issues
             return FinalReport(**data)
