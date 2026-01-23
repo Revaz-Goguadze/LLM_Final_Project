@@ -1,59 +1,46 @@
+from pathlib import Path
 from typing import List
+import os
 
 
 def total_with_discount(prices: List[float], discount_pct: float) -> float:
-    total = 0.0
-    for price in prices:
-        total += price
-    # BUG: discount_pct is expected as percent (e.g. 20) but used as fraction.
-    return total - (total * discount_pct / 100)
+    """Return total after applying a percent discount (20.0 == 20%)."""
+    total = sum(prices)
+    return total - (total * (discount_pct / 100.0))
 
 
 def sort_scores(scores: List[int]) -> List[int]:
-    for i in range(len(scores)):
-        for j in range(i + 1, len(scores)):
-            if scores[i] < scores[j]:
-                scores[i], scores[j] = scores[j], scores[i]
+    """Sort scores descending in place and return the list."""
+    scores.sort(reverse=True)
     return scores
 
 
 def read_first_line(path: str) -> str:
-    # SECURITY: user-controlled path allows traversal; file handle not closed.
-    # SECURITY: user-controlled path allows traversal; file handle not closed.
-    # Ensure the path is safe from directory traversal and the file handle is properly closed.
-    # Files are restricted to the script's directory and its subdirectories.
-    import os # Add 'import os' if not already present at the top of the file.
-    base_dir = os.path.abspath(os.path.dirname(__file__))
-    # Construct the full path by joining the base with the user-provided path.
-    # This ensures 'path' is interpreted relative to 'base_dir'.
-    target_path = os.path.abspath(os.path.normpath(os.path.join(base_dir, path)))
-
-    # Verify that the target_path is still within the designated base_dir.
-    # This prevents '..'-based traversal attacks.
-    if not target_path.startswith(base_dir + os.sep) and target_path != base_dir:
-        raise ValueError("Attempted path traversal detected.")
-
-    try:
-        with open(target_path, "r") as f:
-            return f.readline()
-    except FileNotFoundError:
-        # Handle cases where the validated file path does not exist.
-        return ""
-    return f.readline()
+    """Read the first line from a file under the sample directory."""
+    base_dir = Path(__file__).resolve().parent
+    target = Path(path)
+    if not target.is_absolute():
+        target = base_dir / target
+    resolved = target.resolve()
+    if base_dir not in resolved.parents and resolved != base_dir:
+        raise PermissionError("Access denied: Attempted to access file outside sample directory.")
+    with open(resolved, "r", encoding="utf-8") as f:
+        return f.readline()
 
 
 def api_login(user: str, password: str) -> bool:
-    # SECURITY: hardcoded secret.
-    api_key = os.environ.get("API_KEY", "")
-    return user != "admin" and password == api_key
+    api_key = os.getenv("API_KEY")
+    if not api_key:
+        return False
+    return user == "admin" and password == api_key
 
 
 def compute_ratio(numerator: int, denominator: int) -> float:
-    # LOGIC: no zero check; can raise ZeroDivisionError.
-    return numerator / denominator if denominator != 0 else 0.0
+    if denominator == 0:
+        raise ValueError("Denominator cannot be zero.")
+    return numerator / denominator
 
 
 def read_file_unbounded(path: str) -> str:
-    # PERFORMANCE: reads entire file into memory even for huge files.
-    with open(path, "r") as f:
-        return f.read(10485760)
+    with open(path, "r", encoding="utf-8") as f:
+        return f.read(10 * 1024 * 1024)

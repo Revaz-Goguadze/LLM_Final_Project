@@ -66,17 +66,28 @@ class FixLoopRunner:
                 break
         return start_idx + 1, end_idx + 1
 
-    def _ensure_edit_window(self, issue: BugIssue) -> Optional[tuple[int, int, str]]:
+    def _ensure_edit_window(
+        self, issue: BugIssue, refresh: bool = False
+    ) -> Optional[tuple[int, int, str]]:
         if issue.start_line and issue.end_line and issue.start_line != issue.end_line:
             return None
+        if refresh and issue.chunk_type == "window":
+            issue.chunk_start_line = None
+            issue.chunk_end_line = None
+            issue.chunk_type = None
+        if refresh and issue.location.function:
+            bounds = self._find_function_bounds(issue)
+            if bounds:
+                issue.chunk_start_line, issue.chunk_end_line = bounds
+                issue.chunk_type = "function"
+                return bounds[0], bounds[1], "function"
         window = self._get_edit_window(issue)
         if not window:
             return None
         start, end, source = window
-        if not issue.chunk_start_line or not issue.chunk_end_line:
-            issue.chunk_start_line = start
-            issue.chunk_end_line = end
-            issue.chunk_type = "window"
+        issue.chunk_start_line = start
+        issue.chunk_end_line = end
+        issue.chunk_type = source
         return start, end, source
 
     @staticmethod
@@ -175,6 +186,8 @@ class FixLoopRunner:
             "empty fix payload" in lowered
             or "unsupported fix format" in lowered
             or "fix format must be" in lowered
+            or "missing replacement content" in lowered
+            or "missing patch content" in lowered
             or "json" in lowered
         )
 
@@ -196,10 +209,7 @@ class FixLoopRunner:
         if issue.location and issue.location.file:
             issue.location.file = normalize_repo_path(issue.location.file)
 
-        window_info = self._ensure_edit_window(issue)
-        if window_info:
-            start, end, source = window_info
-            print(f"[Agent] Edit window: {start}-{end} ({source})")
+        window_info: Optional[tuple[int, int, str]] = None
 
         is_valid, reason = agent._validate_issue(issue)
         if not is_valid:
@@ -211,7 +221,7 @@ class FixLoopRunner:
                     )
                     is_valid = True
                     reason = ""
-                    window_info = self._ensure_edit_window(issue)
+                    window_info = self._ensure_edit_window(issue, refresh=True)
                     if window_info:
                         start, end, source = window_info
                         print(f"[Agent] Edit window: {start}-{end} ({source})")
@@ -258,13 +268,22 @@ class FixLoopRunner:
             enforce_format = True
 
         last_verification_output: Optional[str] = None
+        last_verification_error: Optional[str] = None
+        last_diff_summary: Optional[str] = None
         repeated_verification = 0
         chunk_window_idx = 0
+        attempts_used = 0
+        format_error_streak = 0
 
-        for attempt in range(1, MAX_FIX_RETRIES + 1):
+        while attempts_used < MAX_FIX_RETRIES:
+            attempt = attempts_used + 1
             state = AgentState.BUILD_CONTEXT
             print(f"\n[Agent] Attempt {attempt}/{MAX_FIX_RETRIES}")
             print("[Agent] Generating fix...")
+            window_info = self._ensure_edit_window(issue, refresh=True)
+            if window_info:
+                start, end, source = window_info
+                print(f"[Agent] Edit window: {start}-{end} ({source})")
             retry_strategy = None
             retry_instructions = ""
             context_multiplier = 1.0
@@ -302,6 +321,22 @@ class FixLoopRunner:
                         if part
                     )
 
+            verification_context = ""
+            if last_verification_error and last_diff_summary:
+                verification_context = "\n".join(
+                    [
+                        f"Previous patch failed verification because: {last_verification_error}",
+                        "Here is what you changed last time:",
+                        last_diff_summary,
+                        "Do NOT repeat the same patch; use a different strategy.",
+                        "Constraints:",
+                        "- Do NOT change function signature",
+                        "- Preserve return type",
+                        "- Preserve whether inputs are mutated",
+                        "- Preserve behavior expected by existing tests",
+                    ]
+                )
+
             fix_context = agent.fix_context_builder.build_context(
                 issue,
                 diff_text=diff_text,
@@ -310,6 +345,8 @@ class FixLoopRunner:
                 context_multiplier=context_multiplier,
             )
             context_text = agent._format_fix_context(fix_context)
+            if verification_context:
+                context_text = "\n\n".join([verification_context, context_text])
             if issue.start_line and issue.end_line:
                 target_lines = f"{issue.start_line}-{issue.end_line}"
                 target_text = issue.line_text or ""
@@ -401,12 +438,16 @@ class FixLoopRunner:
                             diff_text=diff_text,
                             expected_format=preferred_format if enforce_format else None,
                         )
+                        window_info = self._ensure_edit_window(issue, refresh=True)
+                        if window_info:
+                            start, end, source = window_info
+                            print(f"[Agent] Edit window: {start}-{end} ({source})")
 
             if not is_valid and self._is_format_error(reason):
+                format_error_streak += 1
                 repair_instructions = (
-                    "FORMAT_REPAIR: Return ONLY valid JSON. "
-                    f"Use format='{preferred_format.value if preferred_format else 'patch'}' "
-                    "and include the required fields exactly."
+                    "FORMAT_REPAIR: Return ONLY a valid unified diff with + and - lines "
+                    "and @@ hunks. No explanations."
                 )
                 repair_context = "\n\n".join(
                     part for part in [context_text, repair_instructions] if part
@@ -429,7 +470,7 @@ class FixLoopRunner:
                         issue,
                         payload,
                         diff_text=diff_text,
-                        expected_format=preferred_format if enforce_format else None,
+                        expected_format=FixFormat.PATCH,
                     )
             if not is_valid:
                 last_error = reason
@@ -440,6 +481,10 @@ class FixLoopRunner:
                 ):
                     start, end, source = window_info
                     print(f"[Agent] Rejected outside edit window {start}-{end} ({source})")
+                if self._is_format_error(reason) and format_error_streak < 2:
+                    print("[Agent] Format error; retrying without consuming an attempt.")
+                    continue
+                attempts_used += 1
                 lowered = reason.lower()
                 if (
                     "patch check failed" in lowered
@@ -464,6 +509,8 @@ class FixLoopRunner:
                     json.dumps({"error": reason, "raw": payload}, indent=2),
                 )
                 continue
+            format_error_streak = 0
+            attempts_used += 1
 
             agent._write_run_file(
                 run_dir,
@@ -520,6 +567,17 @@ class FixLoopRunner:
             )
             if not success:
                 last_error = agent.fixer.get_last_error()
+                if is_patch and last_error and "patch" in last_error.lower():
+                    window_info = self._ensure_edit_window(issue, refresh=True)
+                    if window_info:
+                        start, end, source = window_info
+                        window_text = agent._read_line_range(
+                            issue.location.file, start, end
+                        )
+                        last_error = (
+                            f"{last_error}\nCURRENT_WINDOW:\n{window_text}\n"
+                            "Generate a patch that matches the current file content exactly."
+                        )
                 error_history.append(last_error)
                 print(f"[Agent] Could not apply fix: {last_error}")
                 continue
@@ -573,6 +631,8 @@ class FixLoopRunner:
                 return True
 
             diff_summary = self._summarize_diff(pre_content, post_content)
+            last_verification_error = output
+            last_diff_summary = diff_summary
             last_error = f"{output}\nDIFF_SUMMARY:\n{diff_summary}"
             error_history.append(output)
             last_fix = current_fix
