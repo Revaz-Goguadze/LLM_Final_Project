@@ -39,8 +39,13 @@ class FixLoopRunner:
             bounds = self._find_function_bounds(issue)
             if bounds:
                 return bounds[0], bounds[1], "function"
-        if "read_file_unbounded" in (issue.description or ""):
+        desc_lower = (issue.description or "").lower()
+        if "read_file_unbounded" in desc_lower:
             bounds = self._find_function_bounds(issue, "read_file_unbounded")
+            if bounds:
+                return bounds[0], bounds[1], "function"
+        if any(token in desc_lower for token in ["path traversal", "lfi", "local file inclusion"]):
+            bounds = self._find_enclosing_function_bounds(issue)
             if bounds:
                 return bounds[0], bounds[1], "function"
         start = max(1, issue.location.line - self._single_line_window_radius)
@@ -62,6 +67,27 @@ class FixLoopRunner:
             if stripped.startswith(f"def {func_name}") or stripped.startswith(
                 f"class {func_name}"
             ):
+                start_idx = idx
+                break
+        if start_idx is None:
+            return None
+        end_idx = len(lines) - 1
+        for idx in range(start_idx + 1, len(lines)):
+            stripped = lines[idx].lstrip()
+            if stripped.startswith("def ") or stripped.startswith("class "):
+                end_idx = idx - 1
+                break
+        return start_idx + 1, end_idx + 1
+
+    def _find_enclosing_function_bounds(self, issue: BugIssue) -> Optional[tuple[int, int]]:
+        lines = self.agent._read_file_lines(issue.location.file)
+        if not lines or not issue.location.line:
+            return None
+        line_idx = issue.location.line - 1
+        start_idx = None
+        for idx in range(line_idx, -1, -1):
+            stripped = lines[idx].lstrip()
+            if stripped.startswith("def ") or stripped.startswith("class "):
                 start_idx = idx
                 break
         if start_idx is None:
