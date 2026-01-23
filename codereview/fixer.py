@@ -59,19 +59,108 @@ class CodeFixer:
 
         return new_end
 
+    def _locate_by_ast(
+        self,
+        file_path: str,
+        original_line: int,
+        chunk_name: str = "",
+        chunk_type: str = "",
+    ) -> Optional[Tuple[int, int]]:
+        """Find function/class by name using AST - survives line shifts."""
+        if not chunk_name or not file_path.endswith(".py"):
+            return None
+
+        import ast
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                source = f.read()
+            tree = ast.parse(source)
+        except Exception:
+            return None
+
+        for node in ast.walk(tree):
+            if chunk_type == "function" and isinstance(
+                node, (ast.FunctionDef, ast.AsyncFunctionDef)
+            ):
+                if node.name == chunk_name:
+                    return node.lineno, node.end_lineno or node.lineno
+            elif chunk_type == "class" and isinstance(node, ast.ClassDef):
+                if node.name == chunk_name:
+                    return node.lineno, node.end_lineno or node.lineno
+
+        return None
+
+    def _locate_by_fuzzy(
+        self,
+        lines: List[str],
+        original_line: int,
+        search_text: str,
+        threshold: float = 0.6,
+    ) -> Optional[int]:
+        """Find line using fuzzy matching - handles minor edits."""
+        from difflib import SequenceMatcher
+
+        search_stripped = search_text.strip()
+        if not search_stripped:
+            return None
+
+        best_match = None
+        best_score = threshold
+        best_distance = float("inf")
+
+        for i, line in enumerate(lines):
+            line_stripped = line.strip()
+            if not line_stripped:
+                continue
+
+            ratio = SequenceMatcher(None, search_stripped, line_stripped).ratio()
+            if ratio > best_score or (
+                ratio == best_score and abs(i + 1 - original_line) < best_distance
+            ):
+                best_score = ratio
+                best_match = i + 1
+                best_distance = abs(i + 1 - original_line)
+
+        return best_match
+
+    def _locate_by_exact(
+        self,
+        lines: List[str],
+        original_line: int,
+        search_text: str,
+    ) -> Optional[int]:
+        """Find line using exact substring match."""
+        search_stripped = search_text.strip()
+        if not search_stripped:
+            return None
+
+        best_match = None
+        best_distance = float("inf")
+
+        for i, line in enumerate(lines):
+            if search_stripped in line or line.strip() == search_stripped:
+                distance = abs(i + 1 - original_line)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_match = i + 1
+
+        return best_match
+
     def _locate_by_content(
         self,
         file_path: str,
         original_line: int,
         line_text: str = "",
         evidence: str = "",
+        chunk_name: str = "",
+        chunk_type: str = "",
     ) -> Tuple[int, int]:
-        """Find actual line number by matching content, handles line shifts from prior fixes.
+        """Multi-strategy line locator: AST → Fuzzy → Exact → Fallback.
 
-        Returns (start_line, end_line) - 1-indexed.
-        Falls back to original_line if content not found.
+        Handles line shifts from prior fixes by finding code structurally.
         """
-        if not line_text and not evidence:
+        if not any([line_text, evidence, chunk_name]):
             return original_line, original_line
 
         try:
@@ -80,42 +169,49 @@ class CodeFixer:
         except Exception:
             return original_line, original_line
 
-        search_pattern = (line_text or evidence).strip()
-        if not search_pattern:
+        ast_result = self._locate_by_ast(
+            file_path, original_line, chunk_name, chunk_type
+        )
+        if ast_result:
+            func_start, func_end = ast_result
+            if func_start <= original_line <= func_end:
+                return original_line, original_line
+            offset = 0
+            if line_text:
+                for i in range(func_start - 1, min(func_end, len(lines))):
+                    if line_text.strip() in lines[i]:
+                        new_line = i + 1
+                        if new_line != original_line:
+                            print(
+                                f"[Fixer] AST+content: line {original_line} -> {new_line}"
+                            )
+                        return new_line, new_line
+            print(f"[Fixer] AST found {chunk_name} at {func_start}-{func_end}")
             return original_line, original_line
 
-        best_match = None
-        best_distance = float("inf")
-
-        for i, line in enumerate(lines):
-            if search_pattern in line or line.strip() == search_pattern:
-                distance = abs(i + 1 - original_line)
-                if distance < best_distance:
-                    best_distance = distance
-                    best_match = i + 1
-
-        if best_match is not None:
-            if best_match != original_line:
+        search_text = line_text or evidence
+        exact = self._locate_by_exact(lines, original_line, search_text)
+        if exact:
+            if exact != original_line:
                 print(
-                    f"[Fixer] Content match: line {original_line} -> {best_match} (shifted by {best_match - original_line})"
+                    f"[Fixer] Exact match: line {original_line} -> {exact} (shifted {exact - original_line:+d})"
                 )
-            return best_match, best_match
+            return exact, exact
+
+        fuzzy = self._locate_by_fuzzy(lines, original_line, search_text, threshold=0.7)
+        if fuzzy:
+            if fuzzy != original_line:
+                print(f"[Fixer] Fuzzy match: line {original_line} -> {fuzzy}")
+            return fuzzy, fuzzy
 
         if evidence and evidence != line_text:
-            for i, line in enumerate(lines):
-                if evidence.strip() in line:
-                    distance = abs(i + 1 - original_line)
-                    if distance < best_distance:
-                        best_distance = distance
-                        best_match = i + 1
-            if best_match is not None:
-                if best_match != original_line:
-                    print(
-                        f"[Fixer] Evidence match: line {original_line} -> {best_match}"
-                    )
-                return best_match, best_match
+            exact2 = self._locate_by_exact(lines, original_line, evidence)
+            if exact2:
+                if exact2 != original_line:
+                    print(f"[Fixer] Evidence match: line {original_line} -> {exact2}")
+                return exact2, exact2
 
-        print(f"[Fixer] Content not found, using original line {original_line}")
+        print(f"[Fixer] No match found, using original line {original_line}")
         return original_line, original_line
 
     def _snapshot_file(self, file_path: str) -> None:
@@ -299,6 +395,8 @@ class CodeFixer:
                 original_start,
                 line_text=getattr(issue, "line_text", "") or "",
                 evidence=issue.evidence or "",
+                chunk_name=getattr(issue, "chunk_name", "") or "",
+                chunk_type=getattr(issue, "chunk_type", "") or "",
             )
             if original_end and original_end > original_start:
                 actual_end = actual_start + (original_end - original_start)
@@ -363,6 +461,8 @@ class CodeFixer:
                 original_start,
                 line_text=getattr(issue, "line_text", "") or "",
                 evidence=issue.evidence or "",
+                chunk_name=getattr(issue, "chunk_name", "") or "",
+                chunk_type=getattr(issue, "chunk_type", "") or "",
             )
             if original_end and original_end > original_start:
                 actual_end = actual_start + (original_end - original_start)
