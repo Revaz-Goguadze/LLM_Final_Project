@@ -8,6 +8,7 @@ DEMO_MODE=0
 if [[ "${1:-}" == "--demo" ]]; then
   DEMO_MODE=1
 fi
+export DEMO_MODE
 
 if [[ ! -d ".venv" ]]; then
   python -m venv .venv
@@ -31,9 +32,11 @@ import os
 import subprocess
 
 QUERY = "review sample code for security, logic, and performance issues"
+demo_mode = os.getenv("DEMO_MODE", "0") == "1"
 
 subprocess.run(
-    [".venv/bin/python", "main.py", "analyze", "--path", "sample", "--query", QUERY] + (["--demo"] if DEMO_MODE else []),
+    [".venv/bin/python", "main.py", "analyze", "--path", "sample", "--query", QUERY]
+    + (["--demo"] if demo_mode else []),
     check=False,
 )
 
