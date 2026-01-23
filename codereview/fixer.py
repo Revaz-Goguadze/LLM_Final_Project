@@ -165,12 +165,18 @@ class CodeFixer:
             self.last_error = "Empty replacement"
             return False
 
+        first_line_indent = len(replacement_lines[0]) - len(
+            replacement_lines[0].lstrip()
+        )
         indented_lines = []
         for line in replacement_lines:
             if not line.strip():
                 indented_lines.append("\n")
                 continue
-            indented_lines.append(indent_str + line.lstrip() + "\n")
+            line_indent = len(line) - len(line.lstrip())
+            relative_indent = line_indent - first_line_indent
+            total_indent = " " * (original_indent + max(0, relative_indent))
+            indented_lines.append(total_indent + line.lstrip() + "\n")
 
         new_lines = (
             lines[: effective_start - 1] + indented_lines + lines[effective_end:]

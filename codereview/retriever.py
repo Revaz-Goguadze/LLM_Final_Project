@@ -15,6 +15,7 @@ from .config import (
     MODEL_HYDE,
     LLM_MIN_DELAY,
     ENABLE_HYDE,
+    OPENAI_BASE_URL,
 )
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
@@ -45,6 +46,7 @@ class HyDEGenerator:
             else:
                 self.client = OpenAI(
                     api_key=OPENAI_API_KEY,
+                    base_url=OPENAI_BASE_URL or None,
                     timeout=OPENAI_TIMEOUT,
                 )
                 self.model = MODEL_HYDE
