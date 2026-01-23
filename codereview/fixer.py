@@ -59,6 +59,65 @@ class CodeFixer:
 
         return new_end
 
+    def _locate_by_content(
+        self,
+        file_path: str,
+        original_line: int,
+        line_text: str = "",
+        evidence: str = "",
+    ) -> Tuple[int, int]:
+        """Find actual line number by matching content, handles line shifts from prior fixes.
+
+        Returns (start_line, end_line) - 1-indexed.
+        Falls back to original_line if content not found.
+        """
+        if not line_text and not evidence:
+            return original_line, original_line
+
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                lines = f.readlines()
+        except Exception:
+            return original_line, original_line
+
+        search_pattern = (line_text or evidence).strip()
+        if not search_pattern:
+            return original_line, original_line
+
+        best_match = None
+        best_distance = float("inf")
+
+        for i, line in enumerate(lines):
+            if search_pattern in line or line.strip() == search_pattern:
+                distance = abs(i + 1 - original_line)
+                if distance < best_distance:
+                    best_distance = distance
+                    best_match = i + 1
+
+        if best_match is not None:
+            if best_match != original_line:
+                print(
+                    f"[Fixer] Content match: line {original_line} -> {best_match} (shifted by {best_match - original_line})"
+                )
+            return best_match, best_match
+
+        if evidence and evidence != line_text:
+            for i, line in enumerate(lines):
+                if evidence.strip() in line:
+                    distance = abs(i + 1 - original_line)
+                    if distance < best_distance:
+                        best_distance = distance
+                        best_match = i + 1
+            if best_match is not None:
+                if best_match != original_line:
+                    print(
+                        f"[Fixer] Evidence match: line {original_line} -> {best_match}"
+                    )
+                return best_match, best_match
+
+        print(f"[Fixer] Content not found, using original line {original_line}")
+        return original_line, original_line
+
     def _snapshot_file(self, file_path: str) -> None:
         try:
             with open(file_path, "r", encoding="utf-8") as f:
@@ -231,17 +290,22 @@ class CodeFixer:
         if self._apply_simple_replace(file_path, issue.evidence or "", fix_content):
             return True
 
-        if start_line is None:
-            start_line = issue.location.line
-        if end_line is None:
-            end_line = start_line
+        original_start = start_line if start_line else issue.location.line
+        original_end = end_line if end_line else original_start
 
-        if start_line and start_line > 0:
-            print(
-                f"Evidence mismatch, falling back to line-based fix at line range {start_line}-{end_line}"
+        if original_start and original_start > 0:
+            actual_start, actual_end = self._locate_by_content(
+                file_path,
+                original_start,
+                line_text=getattr(issue, "line_text", "") or "",
+                evidence=issue.evidence or "",
             )
+            if original_end and original_end > original_start:
+                actual_end = actual_start + (original_end - original_start)
+
+            print(f"Applying line-based fix at range {actual_start}-{actual_end}")
             return self._apply_line_range_fix(
-                file_path, start_line, end_line, fix_content
+                file_path, actual_start, actual_end, fix_content
             )
 
         return False
@@ -290,17 +354,22 @@ class CodeFixer:
         ):
             return True, touched_files
 
-        if start_line is None:
-            start_line = issue.location.line
-        if end_line is None:
-            end_line = start_line
+        original_start = start_line if start_line else issue.location.line
+        original_end = end_line if end_line else original_start
 
-        if start_line and start_line > 0:
-            print(
-                f"Evidence mismatch, falling back to line-based fix at line range {start_line}-{end_line}"
+        if original_start and original_start > 0:
+            actual_start, actual_end = self._locate_by_content(
+                file_path,
+                original_start,
+                line_text=getattr(issue, "line_text", "") or "",
+                evidence=issue.evidence or "",
             )
+            if original_end and original_end > original_start:
+                actual_end = actual_start + (original_end - original_start)
+
+            print(f"Applying line-based fix at range {actual_start}-{actual_end}")
             applied = self._apply_line_range_fix(
-                file_path, start_line, end_line, fix_content
+                file_path, actual_start, actual_end, fix_content
             )
             if not applied:
                 self.rollback_files(touched_files)
