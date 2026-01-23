@@ -22,3 +22,30 @@ def test_sort_scores_mutates_and_returns_same_list():
     result = example.sort_scores(scores)
     assert result is scores
     assert scores == [3, 2, 1]
+
+
+def test_read_file_unbounded_rejects_traversal():
+    example = _load_example_module()
+    try:
+        example.read_file_unbounded("../../etc/passwd")
+    except ValueError:
+        return
+    assert False, "Traversal should be rejected"
+
+
+def test_api_login_requires_secret(monkeypatch):
+    example = _load_example_module()
+    monkeypatch.delenv("API_KEY", raising=False)
+    assert example.api_login("admin", "secret") is False
+
+
+def test_api_login_rejects_wrong_password(monkeypatch):
+    example = _load_example_module()
+    monkeypatch.setenv("API_KEY", "secret")
+    assert example.api_login("admin", "wrong") is False
+
+
+def test_api_login_accepts_admin(monkeypatch):
+    example = _load_example_module()
+    monkeypatch.setenv("API_KEY", "secret")
+    assert example.api_login("admin", "secret") is True

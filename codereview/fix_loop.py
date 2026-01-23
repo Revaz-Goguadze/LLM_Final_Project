@@ -39,21 +39,29 @@ class FixLoopRunner:
             bounds = self._find_function_bounds(issue)
             if bounds:
                 return bounds[0], bounds[1], "function"
+        if "read_file_unbounded" in (issue.description or ""):
+            bounds = self._find_function_bounds(issue, "read_file_unbounded")
+            if bounds:
+                return bounds[0], bounds[1], "function"
         start = max(1, issue.location.line - self._single_line_window_radius)
         end = issue.location.line + self._single_line_window_radius
         return start, end, "window"
 
-    def _find_function_bounds(self, issue: BugIssue) -> Optional[tuple[int, int]]:
+    def _find_function_bounds(
+        self, issue: BugIssue, function_name: Optional[str] = None
+    ) -> Optional[tuple[int, int]]:
         lines = self.agent._read_file_lines(issue.location.file)
         if not lines:
             return None
-        func_name = issue.location.function.split(".")[-1].strip("()")
+        func_name = function_name or issue.location.function.split(".")[-1].strip("()")
         if not func_name:
             return None
         start_idx = None
         for idx, line in enumerate(lines):
             stripped = line.lstrip()
-            if stripped.startswith(f"def {func_name}") or stripped.startswith(f"class {func_name}"):
+            if stripped.startswith(f"def {func_name}") or stripped.startswith(
+                f"class {func_name}"
+            ):
                 start_idx = idx
                 break
         if start_idx is None:
@@ -195,10 +203,33 @@ class FixLoopRunner:
     def _is_chunk_range_error(reason: str) -> bool:
         return "replacement must stay within the target chunk range" in reason.lower()
 
+    @staticmethod
+    def _is_architectural_issue(description: str) -> bool:
+        lowered = (description or "").lower()
+        keywords = ["rate limiting", "lockout", "account lockout", "brute-force"]
+        return any(keyword in lowered for keyword in keywords)
+
+    @staticmethod
+    def _append_mitigation_to_report() -> None:
+        mitigation = (
+            "Add rate limiting at middleware/API gateway (e.g., Flask-Limiter or "
+            "Nginx limit_req)."
+        )
+        try:
+            with open("bug_report.md", "a", encoding="utf-8") as f:
+                f.write(f"\n- Mitigation: {mitigation}\n")
+        except OSError:
+            return
+
     def run(self, issue: BugIssue, diff_text: Optional[str] = None) -> bool:
         agent = self.agent
         print(f"\n[Agent] Starting to fix: {issue.description}")
         print(f"[Agent] File: {issue.location.file}, Line: {issue.location.line}")
+
+        if self._is_architectural_issue(issue.description):
+            print("[Agent] Architectural issue detected; skipping auto-fix.")
+            self._append_mitigation_to_report()
+            return True
 
         state = AgentState.VALIDATE_ISSUE
         run_dir = agent._init_run_dir()

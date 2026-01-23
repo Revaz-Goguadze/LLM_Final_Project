@@ -29,10 +29,14 @@ def read_first_line(path: str) -> str:
 
 
 def api_login(user: str, password: str) -> bool:
-    api_key = os.getenv("API_KEY")
-    if not api_key:
+    import hmac
+
+    secret = os.environ.get("API_KEY")
+    if not secret:
         return False
-    return user == "admin" and password == api_key
+    if user != "admin":
+        return False
+    return hmac.compare_digest(password, secret)
 
 
 def compute_ratio(numerator: int, denominator: int) -> float:
@@ -42,5 +46,9 @@ def compute_ratio(numerator: int, denominator: int) -> float:
 
 
 def read_file_unbounded(path: str) -> str:
-    with open(path, "r", encoding="utf-8") as f:
-        return f.read(10 * 1024 * 1024)
+    base_dir = Path(__file__).resolve().parent
+    resolved = (base_dir / path).resolve()
+    if base_dir not in resolved.parents and resolved != base_dir:
+        raise ValueError("Attempted path traversal detected.")
+    with open(resolved, "r", encoding="utf-8") as f:
+        return f.read()
