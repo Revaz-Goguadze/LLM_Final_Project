@@ -2,14 +2,18 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from enum import Enum
 
+
 class CodeLocation(BaseModel):
     file: str
     line: Optional[int] = None
     function: Optional[str] = None
 
+
 class BugIssue(BaseModel):
-    severity: str = Field(..., description="critical, high, medium, low")
-    type: str = Field(..., description="security, logic, performance, style")
+    severity: str = Field(default="high", description="critical, high, medium, low")
+    type: str = Field(
+        default="security", description="security, logic, performance, style"
+    )
     location: CodeLocation
     description: str
     evidence: str
@@ -23,10 +27,12 @@ class BugIssue(BaseModel):
     chunk_start_line: Optional[int] = None
     chunk_end_line: Optional[int] = None
 
+
 class BestPracticeViolation(BaseModel):
     rule: str
     description: str
     count: int
+
 
 class GraderReport(BaseModel):
     grader_id: str
@@ -35,11 +41,13 @@ class GraderReport(BaseModel):
     overall_score: float
     summary: str
 
+
 class FinalReport(BaseModel):
     winner_assessment: Optional[str] = None
     consolidated_issues: List[BugIssue]
     overall_health_score: float
     summary: str
+
 
 class GitDiff(BaseModel):
     staged: str
@@ -49,6 +57,7 @@ class GitDiff(BaseModel):
 
 
 # Fix Loop Models
+
 
 class FixContext(BaseModel):
     file_context: str = ""
@@ -77,7 +86,9 @@ class ErrorCategory(str, Enum):
 
 
 class Remedy(BaseModel):
-    action: str = Field(..., description="expand_context, change_format, add_imports, etc.")
+    action: str = Field(
+        ..., description="expand_context, change_format, add_imports, etc."
+    )
     description: str
     params: Dict[str, Any] = Field(default_factory=dict)
 
