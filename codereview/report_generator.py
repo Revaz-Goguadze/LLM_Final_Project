@@ -44,6 +44,13 @@ class ReportGenerator:
                     lines = file_cache.get(file_path, [])
                     if line_no <= len(lines):
                         issue.line_text = lines[line_no - 1].rstrip("\n")
+                if issue.evidence_snippet is None:
+                    lines = file_cache.get(file_path, [])
+                    if lines and line_no <= len(lines):
+                        snippet_lines = [lines[line_no - 1].rstrip("\n")]
+                        if line_no < len(lines):
+                            snippet_lines.append(lines[line_no].rstrip("\n"))
+                        issue.evidence_snippet = "\n".join(snippet_lines)
                 if (
                     issue.chunk_start_line is None
                     or issue.chunk_end_line is None

@@ -287,6 +287,9 @@ def fix(issue_id: int):
     """Fix a specific issue by ID from the last report."""
     from codereview.agent import ReActAgent
     from codereview.models import BugIssue
+    from codereview.issue_updater import update_report_for_file
+    from codereview.indexer import CodebaseIndexer
+    from codereview.path_utils import resolve_repo_path
     
     try:
         with open("bug_report.json", "r") as f:
@@ -306,7 +309,14 @@ def fix(issue_id: int):
                 diff_text = meta.get("diff_text")
         except FileNotFoundError:
             diff_text = None
-        agent.solve_issue(issue, diff_text=diff_text)
+        success = agent.solve_issue(issue, diff_text=diff_text)
+        if success and issue.location and issue.location.file:
+            file_path = issue.location.file
+            update_report_for_file("bug_report.json", file_path)
+            try:
+                CodebaseIndexer().index_file(resolve_repo_path(file_path))
+            except Exception as exc:
+                print(f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]")
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
 
