@@ -1,4 +1,5 @@
 from openai import OpenAI
+from typing import Dict
 from .bm25_index import BM25Index
 from .config import (
     VECTOR_DB_COLLECTION,
@@ -93,6 +94,7 @@ class HybridRetriever:
         self.bm25 = BM25Index(path=bm25_path(bm25_index_path))
         self.bm25.load_or_build(self.collection)
         self.hyde = HyDEGenerator() if ENABLE_HYDE else None
+        self.hyde_cache: Dict[str, str] = {}
 
     def _semantic_search(self, query: str, n_results: int):
         try:
@@ -152,7 +154,11 @@ class HybridRetriever:
 
         hyde_semantic = []
         if self.hyde:
-            hyde_doc = self.hyde.generate_hypothetical_doc(query)
+            if query in self.hyde_cache:
+                hyde_doc = self.hyde_cache[query]
+            else:
+                hyde_doc = self.hyde.generate_hypothetical_doc(query)
+                self.hyde_cache[query] = hyde_doc
             hyde_semantic = self._semantic_search(hyde_doc, SEMANTIC_TOP_K)
 
         # Combine semantic + HyDE (keep best score for each doc)
@@ -170,7 +176,8 @@ class HybridRetriever:
         )
         bm25_ranked = sorted(
             [(item["id"], float(item["score"])) for item in bm25],
-            key=lambda x: x[1], reverse=True
+            key=lambda x: x[1],
+            reverse=True,
         )
 
         # Apply RRF fusion

@@ -71,7 +71,8 @@ class CodeFixer:
             self.last_error = f"Evidence not found in {file_path}"
             return False
 
-        new_content = content.replace(evidence, replacement, 1)
+        normalized_replacement = replacement.lstrip()
+        new_content = content.replace(evidence, normalized_replacement, 1)
         with open(file_path, "w", encoding="utf-8") as f:
             f.write(new_content)
         return True
@@ -106,34 +107,24 @@ class CodeFixer:
         original_indent = len(original_line) - len(original_line.lstrip())
         indent_str = original_line[:original_indent]
 
+        # Fully dedent the replacement to normalize indentation
         normalized_replacement = textwrap.dedent(replacement).strip("\n")
         replacement_lines = normalized_replacement.splitlines()
         if not replacement_lines:
             self.last_error = "Empty replacement"
             return False
 
-        positive_indents = [
-            len(line) - len(line.lstrip())
-            for line in replacement_lines
-            if line.strip()
-        ]
-        min_indent = min(positive_indents) if positive_indents else 0
-
+        # Re-indent each line to match the original indentation
         indented_lines = []
         for line in replacement_lines:
             if not line.strip():
                 indented_lines.append("\n")
                 continue
-            line_indent = len(line) - len(line.lstrip())
-            normalized_indent = max(0, line_indent - min_indent)
-            indented_lines.append(
-                indent_str + " " * normalized_indent + line.lstrip() + "\n"
-            )
+            # Strip any remaining leading whitespace and add original indent
+            indented_lines.append(indent_str + line.lstrip() + "\n")
 
         new_lines = (
-            lines[: effective_start - 1]
-            + indented_lines
-            + lines[effective_end:]
+            lines[: effective_start - 1] + indented_lines + lines[effective_end:]
         )
 
         with open(file_path, "w", encoding="utf-8") as f:
@@ -194,7 +185,9 @@ class CodeFixer:
             print(
                 f"Evidence mismatch, falling back to line-based fix at line range {start_line}-{end_line}"
             )
-            return self._apply_line_range_fix(file_path, start_line, end_line, fix_content)
+            return self._apply_line_range_fix(
+                file_path, start_line, end_line, fix_content
+            )
 
         return False
 
