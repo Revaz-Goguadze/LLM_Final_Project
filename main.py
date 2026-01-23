@@ -416,6 +416,7 @@ def fix(issue_id: int):
                             "severity": issue.severity,
                             "file": (issue.location.file if issue.location else ""),
                             "line": (issue.location.line if issue.location else ""),
+                            "function": (issue.location.function if issue.location else ""),
                             "description": issue.description,
                         }
                     )
@@ -457,7 +458,8 @@ def fix(issue_id: int):
             for item in fixed:
                 summary_lines.append(
                     f"- {item['id']} {item['severity']} "
-                    f"{item['file']}:{item['line']}: {item['description']}"
+                    f"{item['file']}:{item['line']} {item.get('function','')}: "
+                    f"{item['description']}"
                 )
         else:
             summary_lines.append("- None")
@@ -477,8 +479,11 @@ def fix(issue_id: int):
         if patch_log:
             for entry in patch_log:
                 summary_lines.append(
-                    f"- {entry.get('id','')} {entry['description']} (attempts: {entry['attempts']})"
+                    f"- {entry.get('id','')} {entry['description']} "
+                    f"(attempts: {entry['attempts']})"
                 )
+                if entry.get("verification"):
+                    summary_lines.append(f"  - Verification: {entry['verification']}")
                 if entry["diff_summary"]:
                     summary_lines.append("```diff")
                     summary_lines.append(entry["diff_summary"])

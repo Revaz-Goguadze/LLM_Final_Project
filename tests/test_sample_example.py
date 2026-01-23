@@ -36,16 +36,26 @@ def test_read_file_unbounded_rejects_traversal():
 def test_api_login_requires_secret(monkeypatch):
     example = _load_example_module()
     monkeypatch.delenv("API_KEY", raising=False)
+    monkeypatch.setenv("ADMIN_USER", "admin")
     assert example.api_login("admin", "secret") is False
 
 
 def test_api_login_rejects_wrong_password(monkeypatch):
     example = _load_example_module()
     monkeypatch.setenv("API_KEY", "secret")
+    monkeypatch.setenv("ADMIN_USER", "admin")
     assert example.api_login("admin", "wrong") is False
 
 
 def test_api_login_accepts_admin(monkeypatch):
     example = _load_example_module()
     monkeypatch.setenv("API_KEY", "secret")
+    monkeypatch.setenv("ADMIN_USER", "admin")
     assert example.api_login("admin", "secret") is True
+
+
+def test_api_login_rejects_non_admin(monkeypatch):
+    example = _load_example_module()
+    monkeypatch.setenv("API_KEY", "secret")
+    monkeypatch.setenv("ADMIN_USER", "admin")
+    assert example.api_login("user", "secret") is False
