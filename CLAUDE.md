@@ -38,7 +38,7 @@ Multi-LLM Agentic Code Reviewer using Dual-RAG (codebase + docs) to analyze git 
 - **Models**: Mixtral Devstral-2512 (free tier)
 - **Code Parsing**: tree-sitter for AST chunking
 - **CLI Framework**: typer with rich output
-- **Retrieval**: Hybrid (semantic vector + BM25 lexical, α=0.6)
+- **Retrieval**: Hybrid (semantic vector + BM25 lexical + HyDE, RRF fusion)
 
 ## Commands
 
@@ -77,9 +77,17 @@ python main.py evaluate
 - **Strict Filtering**: Only reports issues with ≥85% confidence
 - **ReAct Agent**: Issue validation and fix generation with verification loop
 
+## Configuration
+
+| Setting | Default | Env Var | Description |
+|---------|---------|---------|-------------|
+| ENABLE_HYDE | `true` | `ENABLE_HYDE` | HyDE (Hypothetical Document Embeddings) improves retrieval quality at ~25s overhead per query. Set to `false` for faster analysis. |
+| SEMANTIC_TOP_K | 8 | - | Number of semantic search results |
+| BM25_TOP_K | 8 | - | Number of BM25 lexical results |
+| HYBRID_ALPHA | 0.6 | - | Weight for semantic vs BM25 in fusion |
+
 ## Known TODOs
 
-- HybridRetriever BM25 integration partially complete
 - Tree-sitter support for JS/TS files planned
 - ReActAgent and CodeFixer are partial implementations
 - `.vector_store/` and `.bm25/` should be gitignored

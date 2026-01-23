@@ -14,7 +14,7 @@ class FixContextBuilder:
 
     def __init__(
         self,
-        code_retriever: HybridRetriever,
+        code_retriever: Optional[HybridRetriever],
         docs_retriever: Optional[HybridRetriever],
         base_context_radius: int = 15,
     ):
@@ -69,9 +69,7 @@ class FixContextBuilder:
             previous_error=previous_error,
         )
 
-    def _read_file_context(
-        self, file_path: str, line: int, context_radius: int
-    ) -> str:
+    def _read_file_context(self, file_path: str, line: int, context_radius: int) -> str:
         """Read file context with line numbers."""
         if not os.path.exists(file_path):
             return ""
@@ -94,6 +92,9 @@ class FixContextBuilder:
         self, issue: BugIssue, attempt: int, previous_error: Optional[str]
     ) -> List[Dict[str, Any]]:
         """Search code RAG with query built from issue."""
+        if self.code_retriever is None:
+            return []
+
         query_parts = [issue.description, issue.evidence]
         if previous_error:
             query_parts.append(f"Previous error: {previous_error}")
@@ -108,18 +109,17 @@ class FixContextBuilder:
 
     def _should_read_docs(self, issue: BugIssue) -> bool:
         """Determine if docs RAG should be searched."""
-        return (
-            self.docs_retriever is not None
-            and (
-                "security" in issue.type.lower()
-                or "best practice" in issue.description.lower()
-                or "authentication" in issue.description.lower()
-                or "authorization" in issue.description.lower()
-            )
+        return self.docs_retriever is not None and (
+            "security" in issue.type.lower()
+            or "best practice" in issue.description.lower()
+            or "authentication" in issue.description.lower()
+            or "authorization" in issue.description.lower()
         )
 
     def _search_docs_rag(self, issue: BugIssue) -> List[Dict[str, Any]]:
         """Search documentation RAG."""
+        if self.docs_retriever is None:
+            return []
         query = f"{issue.description}\n{issue.evidence}"
         try:
             return self.docs_retriever.search(query, n_results=3)
@@ -144,7 +144,11 @@ class FixContextBuilder:
                 in_target_file = True
                 relevant_lines.append(line)
             elif in_target_file:
-                if line.startswith("@@") or line.startswith("+") or line.startswith("-"):
+                if (
+                    line.startswith("@@")
+                    or line.startswith("+")
+                    or line.startswith("-")
+                ):
                     relevant_lines.append(line)
                 elif line.startswith("diff ") or line.startswith("index "):
                     break
@@ -180,6 +184,5 @@ class FixContextBuilder:
         return [
             f
             for f in related
-            if os.path.exists(os.path.join(base_dir, f))
-            or os.path.exists(f)
+            if os.path.exists(os.path.join(base_dir, f)) or os.path.exists(f)
         ]

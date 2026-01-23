@@ -66,6 +66,7 @@ class ReActAgent:
             if OPENAI_BASE_URL:
                 client_kwargs["base_url"] = OPENAI_BASE_URL
             self.client = OpenAI(**client_kwargs)
+
         self.retriever = HybridRetriever()
         try:
             self.docs_retriever = HybridRetriever(
@@ -74,6 +75,7 @@ class ReActAgent:
             )
         except (ValueError, EOFError):
             self.docs_retriever = None
+
         self.fixer = CodeFixer()
         self.fix_context_builder = FixContextBuilder(
             self.retriever, self.docs_retriever
@@ -285,30 +287,53 @@ class ReActAgent:
         error_context = ""
         if previous_error:
             error_context = f"""
-The previous fix attempt failed with this error:
-{previous_error}
-
-Generate a DIFFERENT fix that addresses this error.
+PREVIOUS ATTEMPT FAILED: {previous_error[:300]}
+You MUST generate a DIFFERENT fix that avoids this error.
 """
 
         extra = f"\nADDITIONAL CONTEXT:\n{extra_context}\n" if extra_context else ""
 
-        prompt = f"""You are a code fixing agent. Return a JSON object only.
+        # Get the exact target line(s) if available
+        target_info = ""
+        if issue.start_line and issue.end_line:
+            target_info = f"TARGET LINES: {issue.start_line}-{issue.end_line}"
+        elif issue.location.line:
+            target_info = f"TARGET LINE: {issue.location.line}"
 
-BUG: {issue.description}
+        evidence_info = ""
+        if issue.evidence:
+            evidence_info = f"BUGGY CODE: {issue.evidence[:200]}"
+
+        suggested_fix_hint = ""
+        if issue.suggested_fix:
+            suggested_fix_hint = f"SUGGESTED APPROACH: {issue.suggested_fix[:150]}"
+
+        prompt = f"""You are a precise code fixing agent. Output ONLY valid JSON.
+
+ISSUE: {issue.description}
 FILE: {issue.location.file}
-LINE: {issue.location.line}
+{target_info}
+{evidence_info}
+{suggested_fix_hint}
 {error_context}
-CURRENT CODE:
+
+CURRENT CODE WITH LINE NUMBERS:
 {file_context}
 {extra}
 
-INSTRUCTIONS:
-1. If a unified diff is safest, return: {{ "format": "patch", "patch": "diff --git ..." }}
-2. Otherwise return: {{ "format": "replace", "start_line": int, "end_line": int, "replacement": "..." }}
-3. replacement should include only the corrected line(s) and preserve indentation
-4. NO markdown, NO code blocks, NO explanations
-5. Output JSON only"""
+OUTPUT FORMAT (choose ONE):
+Option A - Line replacement (preferred for single-line fixes):
+{{"format": "replace", "start_line": <int>, "end_line": <int>, "replacement": "<fixed code>"}}
+
+Option B - Unified diff (for multi-file or complex changes):
+{{"format": "patch", "patch": "diff --git a/file b/file\\n..."}}
+
+RULES:
+1. start_line/end_line must match the EXACT buggy lines shown above
+2. replacement must preserve the original indentation (spaces/tabs)
+3. replacement should fix ONLY the bug, minimal changes
+4. Output raw JSON only - NO markdown, NO code blocks, NO explanation
+5. Ensure the fix compiles and is syntactically correct"""
 
         for attempt in range(LLM_MAX_RETRIES):
             try:
@@ -319,7 +344,7 @@ INSTRUCTIONS:
                 response = self.client.chat.completions.create(
                     model=self.model,
                     messages=[{"role": "user", "content": prompt}],
-                    max_tokens=32768,  # 32K for GLM-4.7 reasoning mode
+                    max_tokens=4096,  # Reduced - fixes are typically small
                     timeout=OPENAI_TIMEOUT,
                 )
                 if response.choices and response.choices[0].message:
@@ -333,6 +358,7 @@ INSTRUCTIONS:
                     continue
                 print(f"Error generating fix: {e}")
                 return prompt, ""
+        return prompt, ""  # Fallback return after all retries exhausted
 
     def _format_fix_context(self, fix_context: FixContext) -> str:
         blocks = []

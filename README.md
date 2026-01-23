@@ -125,6 +125,27 @@ Edit `codereview/config.py` to customize:
 - Fix loop retry limits
 - Verification commands
 
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `GEMINI_API_KEY` | - | Required. Gemini API key for LLM calls |
+| `ENABLE_HYDE` | `true` | HyDE (Hypothetical Document Embeddings) generates a synthetic answer before retrieval, improving semantic search quality. Adds ~25s overhead per analysis. Set to `false` for faster results. |
+
+### Performance Tuning
+
+**Fast mode** (disable HyDE):
+```bash
+ENABLE_HYDE=false python main.py analyze --staged
+```
+
+**Quality mode** (default, HyDE enabled):
+```bash
+python main.py analyze --staged
+```
+
+HyDE results are cached per query within a session to avoid repeated LLM calls.
+
 ## Metrics
 
 The evaluation system tracks:

@@ -47,11 +47,17 @@ MODEL_JUDGE_OPTIONS = [
 ]
 
 # Deduplication settings
-ENABLE_DEDUPLICATION = os.getenv("ENABLE_DEDUPLICATION", "true").lower() in ("1", "true", "yes")
+ENABLE_DEDUPLICATION = os.getenv("ENABLE_DEDUPLICATION", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 DEDUPLICATION_LINE_THRESHOLD = int(os.getenv("DEDUPLICATION_LINE_THRESHOLD", "3"))
 
 # Storage
-VECTOR_STORE_PATH = os.getenv("VECTOR_STORE_PATH", os.path.join(os.getcwd(), ".vector_store"))
+VECTOR_STORE_PATH = os.getenv(
+    "VECTOR_STORE_PATH", os.path.join(os.getcwd(), ".vector_store")
+)
 VECTOR_DB_COLLECTION = "codebase"
 DOCS_DB_COLLECTION = "docs"
 BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "index.pkl")
@@ -61,13 +67,24 @@ DOCS_BM25_INDEX_PATH = os.path.join(os.getcwd(), ".bm25", "docs_index.pkl")
 SEMANTIC_TOP_K = 8
 BM25_TOP_K = 8
 HYBRID_ALPHA = 0.6
-ENABLE_HYDE = os.getenv("ENABLE_HYDE", "false").lower() in ("1", "true", "yes")  # Disabled by default for speed
+ENABLE_HYDE = os.getenv("ENABLE_HYDE", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)  # Enabled by default for better retrieval quality (~25s overhead)
 
 # Performance settings
-ENABLE_PARALLEL_GRADING = os.getenv("ENABLE_PARALLEL_GRADING", "true").lower() in ("1", "true", "yes")
+ENABLE_PARALLEL_GRADING = os.getenv("ENABLE_PARALLEL_GRADING", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 # Settings
 MAX_FIX_RETRIES = 3
+MAX_FIX_TIMEOUT = int(
+    os.getenv("MAX_FIX_TIMEOUT", "120")
+)  # Total timeout per issue in seconds
 CONTEXT_WINDOW_REDUCTION_SUMMARY = True
 VERIFY_COMMAND = os.getenv("VERIFY_COMMAND", "pytest")
 EMBEDDING_MODE = os.getenv("EMBEDDING_MODE", "openai")
