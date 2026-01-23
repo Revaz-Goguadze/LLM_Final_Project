@@ -1,12 +1,65 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+.venv.bak*/
+venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Vector stores & indexes
 .bm25/
 .vector_store/
 .chroma/
-.chroma/
-.bm25/
-__pycache__/
+
+# Runtime artifacts
+runs/
 bug_report*.json
 bug_report*.md
 bug_report_meta.json
+
+# Environment
 .env
+
+# Evaluation artifacts  
 evaluation/fix_history.json
-runs/
+evaluation/comparison_plots/
+evaluation/comparison_summary.json
+evaluation/results_summary*.json
+
+# Project planning docs (keep locally, not in repo)
+AGENTS.md
+CLAUDE.md
+IMPLEMENTATION_SPEC.md
+ROADMAP.md
+WORK_BREAKDOWN.md
+analysis_next_steps.md
+plan.md
+project.html
+project.pdf
+project_pdf.md
+project_spec_gaps.md
+codereview/AGENTS.md
+
+# Large binary files
+image.png
+*.png
+!diagrams/*.png
+
+# Generated/temp files
+repomix-output.xml
+tmp_*/
+test_fix_loop/
+gpt-5-pro-report.md
+pytest.ini
+
+# OpenCode
+.opencode/
