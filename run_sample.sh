@@ -4,6 +4,11 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$ROOT_DIR"
 
+DEMO_MODE=0
+if [[ "${1:-}" == "--demo" ]]; then
+  DEMO_MODE=1
+fi
+
 if [[ ! -d ".venv" ]]; then
   python -m venv .venv
   .venv/bin/pip install -r requirements.txt
@@ -28,7 +33,7 @@ import subprocess
 QUERY = "review sample code for security, logic, and performance issues"
 
 subprocess.run(
-    [".venv/bin/python", "main.py", "analyze", "--path", "sample", "--query", QUERY],
+    [".venv/bin/python", "main.py", "analyze", "--path", "sample", "--query", QUERY] + (["--demo"] if DEMO_MODE else []),
     check=False,
 )
 

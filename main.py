@@ -103,12 +103,16 @@ def analyze(
     context_out: str = typer.Option(None, "--context-out"),
     changed_only: bool = typer.Option(False, "--changed-only"),
     base_ref: str = typer.Option("HEAD~1", "--base-ref"),
+    demo: bool = typer.Option(False, "--demo"),
 ):
     """Analyze changes for bugs and bad practices."""
     print("[bold blue]Starting analysis...[/bold blue]")
     
     target_diff = ""
     diff_type = "changes"
+    if demo or os.getenv("DEMO_MODE", "0") == "1":
+        _reset_demo_baseline()
+        print("[bold yellow]DEMO MODE: restored buggy baseline[/bold yellow]")
     if changed_only:
         analyzer = GitAnalyzer()
         target_diff = analyzer.get_diff_against(base_ref)
@@ -350,6 +354,7 @@ def fix(issue_id: int):
         found_total = 0
         issue_status = {}
         issue_details = {}
+        before_issues = []
 
         for pass_idx in range(1, max_passes + 1):
             try:
@@ -361,6 +366,7 @@ def fix(issue_id: int):
                 "code_context": meta.get("code_context", ""),
                 "docs_context": meta.get("docs_context", ""),
             }
+            demo_mode = meta.get("demo", False)
 
             analyze(
                 staged=False,
@@ -379,6 +385,9 @@ def fix(issue_id: int):
             issues = report_data.get("consolidated_issues", [])
             if pass_idx == 1:
                 found_total = len(issues)
+                before_issues = list(issues)
+                if demo_mode:
+                    print(f"[bold yellow]Issues found: {found_total}[/bold yellow]")
             if not issues:
                 remaining = []
                 break
@@ -473,14 +482,55 @@ def fix(issue_id: int):
         summary_lines = [
             "# Fix Summary",
             "",
-            f"- Found: {found_total}",
-            f"- Fixed: {fixed_count}",
-            f"- Failed: {len(failed)}",
-            f"- Skipped: {len(skipped)}",
-            f"- Remaining actionable: {remaining_count}",
+            "| total_found | fixed | failed | skipped | remaining_actionable |",
+            "| --- | --- | --- | --- | --- |",
+            f"| {found_total} | {fixed_count} | {len(failed)} | {len(skipped)} | {remaining_count} |",
             "",
-            "## Fixed Issues",
+            "## Before Fix",
         ]
+        for item in before_issues:
+            loc = item.get("location") or {}
+            summary_lines.append(
+                f"- {item.get('severity','')} "
+                f"{loc.get('file','')}:{loc.get('line','')}: "
+                f"{item.get('description','unknown')}"
+            )
+        if not before_issues:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## Applied Patches")
+        if patch_log:
+            for entry in patch_log:
+                summary_lines.append(
+                    f"- {entry.get('id','')} {entry['description']} "
+                    f"(attempts: {entry['attempts']})"
+                )
+                if entry.get("verification"):
+                    summary_lines.append(f"  - Verification: {entry['verification']}")
+                if entry["diff_summary"]:
+                    summary_lines.append("```diff")
+                    summary_lines.append(entry["diff_summary"])
+                    summary_lines.append("```")
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## After Fix")
+        if remaining_count:
+            for issue_id, meta in issue_status.items():
+                if meta["status"] in {"FIXED", "SKIPPED"}:
+                    continue
+                item = issue_details.get(issue_id, {})
+                loc = item.get("location") or {}
+                summary_lines.append(
+                    f"- {issue_id} {item.get('severity','')} "
+                    f"{loc.get('file','')}:{loc.get('line','')}: "
+                    f"{item.get('description','unknown')}"
+                )
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## Fixed Issues")
+        patch_log_map = {entry.get("id", ""): entry for entry in patch_log}
         if fixed:
             for item in fixed:
                 summary_lines.append(
@@ -488,6 +538,13 @@ def fix(issue_id: int):
                     f"{item['file']}:{item['line']} {item.get('function','')}: "
                     f"{item['description']}"
                 )
+                entry = patch_log_map.get(item["id"], {})
+                if entry.get("verification"):
+                    summary_lines.append(f"  - Verification: {entry['verification']}")
+                if entry.get("diff_summary"):
+                    summary_lines.append("```diff")
+                    summary_lines.append(entry["diff_summary"])
+                    summary_lines.append("```")
         else:
             summary_lines.append("- None")
         summary_lines.append("")
@@ -569,8 +626,21 @@ def fix(issue_id: int):
             json.dump(issues_final, f, indent=2)
 
         _print_consolidated_issues_console(issue_details, issue_status)
+        if demo_mode:
+            print(
+                f"[bold yellow]Fixed: {fixed_count}, Remaining: {remaining_count}[/bold yellow]"
+            )
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
+
+
+def _reset_demo_baseline() -> None:
+    import shutil
+
+    baseline_path = os.path.join("sample", "baseline", "example_buggy.py")
+    target_path = os.path.join("sample", "example.py")
+    if os.path.exists(baseline_path):
+        shutil.copyfile(baseline_path, target_path)
 
 
 def _print_consolidated_issues_console(issue_details: dict, issue_status: dict) -> None:
