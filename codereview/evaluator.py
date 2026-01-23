@@ -186,10 +186,13 @@ class EvaluationRunner:
                 r2 = self.grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
                 predicted = [i.model_dump() for i in r2.issues]
             else:
-                # Multi model: all graders + judge
-                r1 = self.grader.grade_with_model("security", MODEL_GRADER_SECURITY, analysis_input)
-                r2 = self.grader.grade_with_model("logic", MODEL_GRADER_LOGIC, analysis_input)
-                r3 = self.grader.grade_with_model("performance", MODEL_GRADER_PERF, analysis_input)
+                # Multi model: all graders + judge (parallel for speed)
+                r1, r2, r3 = self.grader.grade_all_parallel(
+                    analysis_input,
+                    MODEL_GRADER_SECURITY,
+                    MODEL_GRADER_LOGIC,
+                    MODEL_GRADER_PERF,
+                )
                 final = self.grader.judge([r1, r2, r3])
                 predicted = [i.model_dump() for i in final.consolidated_issues]
 

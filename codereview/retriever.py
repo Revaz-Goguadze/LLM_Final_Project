@@ -13,6 +13,7 @@ from .config import (
     OPENAI_TIMEOUT,
     MODEL_HYDE,
     LLM_MIN_DELAY,
+    ENABLE_HYDE,
 )
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
@@ -91,7 +92,7 @@ class HybridRetriever:
         )
         self.bm25 = BM25Index(path=bm25_path(bm25_index_path))
         self.bm25.load_or_build(self.collection)
-        self.hyde = HyDEGenerator()
+        self.hyde = HyDEGenerator() if ENABLE_HYDE else None
 
     def _semantic_search(self, query: str, n_results: int):
         try:
