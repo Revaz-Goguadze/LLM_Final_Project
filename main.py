@@ -273,7 +273,18 @@ def analyze(
     # 6. Generate Report
     ReportGenerator.save_report(final_report, "bug_report.json")
     with open("bug_report_meta.json", "w", encoding="utf-8") as f:
-        json.dump({"diff_type": diff_type, "diff_text": target_diff}, f, indent=2)
+        json.dump(
+            {
+                "diff_type": diff_type,
+                "diff_text": target_diff,
+                "query": query,
+                "path": path,
+                "use_rag": use_rag,
+                "use_docs_rag": use_docs_rag,
+            },
+            f,
+            indent=2,
+        )
     print("[bold green]Analysis complete! Report saved to bug_report.md[/bold green]")
     
     # 7. Print Summary
@@ -292,35 +303,49 @@ def fix(issue_id: int):
     from codereview.path_utils import resolve_repo_path
 
     try:
-        with open("bug_report.json", "r") as f:
-            report_data = json.load(f)
-
-        issues = report_data.get("consolidated_issues", [])
         fix_everything = os.getenv("FIX_EVERYTHING", "1") == "1"
-        if not issues:
-            print("[yellow]No issues to fix.[/yellow]")
-            return
-        if not fix_everything and issue_id >= len(issues):
-            print(f"[red]Issue ID {issue_id} not found.[/red]")
+        if fix_everything and issue_id != 0:
+            print("[yellow]Fix-all mode enabled; skipping per-issue invocation.[/yellow]")
             return
 
+        max_passes = int(os.getenv("MAX_FIX_PASSES", "5"))
         agent = ReActAgent()
-        diff_text = None
-        try:
-            with open("bug_report_meta.json", "r", encoding="utf-8") as f:
-                meta = json.load(f)
-                diff_text = meta.get("diff_text")
-        except FileNotFoundError:
-            diff_text = None
 
         fixed = []
         patch_log = []
+        remaining = []
+        found_total = 0
 
-        target_issues = issues if fix_everything else [issues[issue_id]]
-        remaining = list(issues)
+        for pass_idx in range(1, max_passes + 1):
+            try:
+                with open("bug_report_meta.json", "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except FileNotFoundError:
+                meta = {}
 
-        for issue_data in list(target_issues):
+            analyze(
+                staged=False,
+                unstaged=False,
+                last_commit=False,
+                path=meta.get("path"),
+                query=meta.get("query"),
+                use_rag=meta.get("use_rag", True),
+                use_docs_rag=meta.get("use_docs_rag", True),
+            )
+
+            with open("bug_report.json", "r") as f:
+                report_data = json.load(f)
+            issues = report_data.get("consolidated_issues", [])
+            if pass_idx == 1:
+                found_total = len(issues)
+            if not issues:
+                remaining = []
+                break
+
+            issue_data = issues[0] if fix_everything else issues[issue_id]
             issue = BugIssue(**issue_data)
+
+            diff_text = meta.get("diff_text")
             success = agent.solve_issue(issue, diff_text=diff_text)
             if success and issue.location and issue.location.file:
                 file_path = issue.location.file
@@ -332,8 +357,6 @@ def fix(issue_id: int):
 
             if success:
                 fixed.append(issue.description)
-                if issue_data in remaining:
-                    remaining.remove(issue_data)
                 patch_log.append(
                     {
                         "description": issue.description,
@@ -342,17 +365,24 @@ def fix(issue_id: int):
                         "diff_summary": agent.last_fix_summary,
                     }
                 )
+            else:
+                remaining = issues
+                break
 
-        report_data["consolidated_issues"] = remaining
-        with open("bug_report.json", "w", encoding="utf-8") as f:
-            json.dump(report_data, f, indent=2)
+        if not remaining:
+            try:
+                with open("bug_report.json", "r", encoding="utf-8") as f:
+                    report_data = json.load(f)
+                remaining = report_data.get("consolidated_issues", [])
+            except FileNotFoundError:
+                remaining = []
 
         fixed_count = len(fixed)
         remaining_count = len(remaining)
         summary_lines = [
             "# Fix Summary",
             "",
-            f"- Found: {len(issues)}",
+            f"- Found: {found_total}",
             f"- Fixed: {fixed_count}",
             f"- Remaining: {remaining_count}",
             "",
