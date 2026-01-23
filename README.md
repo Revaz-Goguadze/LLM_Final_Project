@@ -50,6 +50,14 @@ python main.py analyze --last-commit
 
 # Analyze a folder without git
 python main.py analyze --path sample --query "review for security issues"
+
+# Disable RAG or run docs-only/code-only
+python main.py analyze --rag-mode off
+python main.py analyze --rag-mode code
+python main.py analyze --rag-mode docs
+
+# Analyze and auto-fix after judge
+python main.py analyze --auto-fix
 ```
 
 ### 5. Fix issues

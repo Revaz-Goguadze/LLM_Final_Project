@@ -97,6 +97,7 @@ def analyze(
     query: str = None,
     use_rag: bool = typer.Option(True, "--use-rag/--no-use-rag"),
     use_docs_rag: bool = typer.Option(True, "--use-docs-rag/--no-use-docs-rag"),
+    rag_mode: str = typer.Option("dual", "--rag-mode"),
     top_k: int = typer.Option(5, "--top-k"),
     docs_top_k: int = typer.Option(5, "--docs-top-k"),
     show_context: bool = typer.Option(False, "--show-context"),
@@ -104,6 +105,7 @@ def analyze(
     changed_only: bool = typer.Option(False, "--changed-only"),
     base_ref: str = typer.Option("HEAD~1", "--base-ref"),
     demo: bool = typer.Option(False, "--demo"),
+    auto_fix: bool = typer.Option(False, "--auto-fix"),
 ):
     """Analyze changes for bugs and bad practices."""
     print("[bold blue]Starting analysis...[/bold blue]")
@@ -113,6 +115,20 @@ def analyze(
     if demo or os.getenv("DEMO_MODE", "0") == "1":
         _reset_demo_baseline()
         print("[bold yellow]DEMO MODE: restored buggy baseline[/bold yellow]")
+
+    rag_mode = (rag_mode or "dual").lower()
+    if rag_mode in {"off", "none"}:
+        use_rag = False
+        use_docs_rag = False
+    elif rag_mode == "code":
+        use_rag = True
+        use_docs_rag = False
+    elif rag_mode == "docs":
+        use_rag = False
+        use_docs_rag = True
+    else:
+        use_rag = True if use_rag else False
+        use_docs_rag = True if use_docs_rag else False
     if changed_only:
         analyzer = GitAnalyzer()
         target_diff = analyzer.get_diff_against(base_ref)
@@ -166,6 +182,15 @@ def analyze(
     rag_query = build_rag_query(query, target_diff)
     if not rag_query:
         rag_query = target_diff[:2000]
+
+    try:
+        top_k = int(top_k)
+    except Exception:
+        top_k = 5
+    try:
+        docs_top_k = int(docs_top_k)
+    except Exception:
+        docs_top_k = 5
 
     # 2. RAG #1: Code Context - Find relevant code from indexed codebase
     code_context = ""
@@ -313,11 +338,13 @@ def analyze(
                 "path": path,
                 "use_rag": use_rag,
                 "use_docs_rag": use_docs_rag,
+                "rag_mode": rag_mode,
                 "changed_only": changed_only,
                 "base_ref": base_ref,
                 "changed_ranges": changed_ranges,
                 "code_context": code_context,
                 "docs_context": docs_context,
+                "demo": demo,
             },
             f,
             indent=2,
@@ -330,306 +357,15 @@ def analyze(
         severity_color = {"critical": "red", "high": "orange1", "medium": "yellow", "low": "green"}.get(issue.severity.lower(), "white")
         print(f"[{severity_color}]- {issue.type.upper()} ({issue.severity}): {issue.description}[/{severity_color}]")
 
+    if auto_fix and final_report.consolidated_issues:
+        print("[bold yellow]Starting fix loop (auto-fix enabled)...[/bold yellow]")
+        _run_fix_passes()
+
 @app.command()
 def fix(issue_id: int):
     """Fix a specific issue by ID from the last report."""
-    from codereview.agent import ReActAgent
-    from codereview.models import BugIssue
-    from codereview.issue_updater import update_report_for_file
-    from codereview.indexer import CodebaseIndexer
-    from codereview.path_utils import resolve_repo_path
-
     try:
-        fix_everything = os.getenv("FIX_EVERYTHING", "1") == "1"
-        if fix_everything and issue_id != 0:
-            print("[yellow]Fix-all mode enabled; skipping per-issue invocation.[/yellow]")
-            return
-
-        max_passes = int(os.getenv("MAX_FIX_PASSES", "5"))
-        agent = ReActAgent()
-
-        fixed = []
-        patch_log = []
-        remaining = []
-        found_total = 0
-        issue_status = {}
-        issue_details = {}
-        before_issues = []
-
-        for pass_idx in range(1, max_passes + 1):
-            try:
-                with open("bug_report_meta.json", "r", encoding="utf-8") as f:
-                    meta = json.load(f)
-            except FileNotFoundError:
-                meta = {}
-            agent.context_cache = {
-                "code_context": meta.get("code_context", ""),
-                "docs_context": meta.get("docs_context", ""),
-            }
-            demo_mode = meta.get("demo", False)
-
-            analyze(
-                staged=False,
-                unstaged=False,
-                last_commit=False,
-                path=meta.get("path"),
-                query=meta.get("query"),
-                use_rag=meta.get("use_rag", True),
-                use_docs_rag=meta.get("use_docs_rag", True),
-                changed_only=meta.get("changed_only", False),
-                base_ref=meta.get("base_ref", "HEAD~1"),
-            )
-
-            with open("bug_report.json", "r") as f:
-                report_data = json.load(f)
-            issues = report_data.get("consolidated_issues", [])
-            if pass_idx == 1:
-                found_total = len(issues)
-                before_issues = list(issues)
-                if demo_mode:
-                    print(f"[bold yellow]Issues found: {found_total}[/bold yellow]")
-            if not issues:
-                remaining = []
-                break
-
-            severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
-            issues_sorted = sorted(
-                issues,
-                key=lambda item: (
-                    severity_order.get(str(item.get("severity", "")).lower(), 9),
-                    (item.get("location") or {}).get("file", ""),
-                ),
-            )
-
-            diff_text = meta.get("diff_text")
-            for issue_data in issues_sorted:
-                issue_id = issue_data.get("id")
-                if issue_id:
-                    issue_details[issue_id] = issue_data
-                if issue_id and issue_status.get(issue_id, {}).get("status") == "FIXED":
-                    continue
-                if meta.get("changed_ranges"):
-                    file_path = issue_data.get("location", {}).get("file")
-                    if file_path:
-                        ranges = meta.get("changed_ranges", {}).get(file_path, [])
-                        issue_data["changed_ranges"] = ranges
-                issue = BugIssue(**issue_data)
-                success = agent.solve_issue(issue, diff_text=diff_text)
-                if success and issue.location and issue.location.file:
-                    file_path = issue.location.file
-                    update_report_for_file("bug_report.json", file_path)
-                    try:
-                        CodebaseIndexer().index_file(resolve_repo_path(file_path))
-                    except Exception as exc:
-                        print(
-                            f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]"
-                        )
-
-                status = agent.last_fix_status or ("FIXED" if success else "FAILED")
-                reason = agent.last_fix_reason
-                if issue.id:
-                    issue_status[issue.id] = {"status": status, "reason": reason}
-                if status == "FIXED":
-                    fixed.append(
-                        {
-                            "id": issue.id or "",
-                            "severity": issue.severity,
-                            "file": (issue.location.file if issue.location else ""),
-                            "line": (issue.location.line if issue.location else ""),
-                            "function": (issue.location.function if issue.location else ""),
-                            "description": issue.description,
-                        }
-                    )
-                    patch_log.append(
-                        {
-                            "id": issue.id or "",
-                            "description": issue.description,
-                            "attempts": agent.last_fix_attempts,
-                            "verification": agent.last_verification_output,
-                            "diff_summary": agent.last_fix_summary,
-                        }
-                    )
-                elif status == "SKIPPED":
-                    patch_log.append(
-                        {
-                            "id": issue.id or "",
-                            "description": issue.description,
-                            "attempts": agent.last_fix_attempts,
-                            "verification": agent.last_verification_output,
-                            "diff_summary": agent.last_fix_summary,
-                        }
-                    )
-                else:
-                    remaining = issues
-                    break
-            else:
-                remaining = []
-
-        if not remaining:
-            try:
-                with open("bug_report.json", "r", encoding="utf-8") as f:
-                    report_data = json.load(f)
-                remaining = report_data.get("consolidated_issues", [])
-            except FileNotFoundError:
-                remaining = []
-
-        fixed_count = len(fixed)
-        failed = [iid for iid, meta in issue_status.items() if meta["status"] == "FAILED"]
-        skipped = [iid for iid, meta in issue_status.items() if meta["status"] == "SKIPPED"]
-        remaining_count = len(
-            [iid for iid, meta in issue_status.items() if meta["status"] not in {"FIXED", "SKIPPED"}]
-        )
-        summary_lines = [
-            "# Fix Summary",
-            "",
-            "| total_found | fixed | failed | skipped | remaining_actionable |",
-            "| --- | --- | --- | --- | --- |",
-            f"| {found_total} | {fixed_count} | {len(failed)} | {len(skipped)} | {remaining_count} |",
-            "",
-            "## Before Fix",
-        ]
-        for item in before_issues:
-            loc = item.get("location") or {}
-            summary_lines.append(
-                f"- {item.get('severity','')} "
-                f"{loc.get('file','')}:{loc.get('line','')}: "
-                f"{item.get('description','unknown')}"
-            )
-        if not before_issues:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Applied Patches")
-        if patch_log:
-            for entry in patch_log:
-                summary_lines.append(
-                    f"- {entry.get('id','')} {entry['description']} "
-                    f"(attempts: {entry['attempts']})"
-                )
-                if entry.get("verification"):
-                    summary_lines.append(f"  - Verification: {entry['verification']}")
-                if entry["diff_summary"]:
-                    summary_lines.append("```diff")
-                    summary_lines.append(entry["diff_summary"])
-                    summary_lines.append("```")
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## After Fix")
-        if remaining_count:
-            for issue_id, meta in issue_status.items():
-                if meta["status"] in {"FIXED", "SKIPPED"}:
-                    continue
-                item = issue_details.get(issue_id, {})
-                loc = item.get("location") or {}
-                summary_lines.append(
-                    f"- {issue_id} {item.get('severity','')} "
-                    f"{loc.get('file','')}:{loc.get('line','')}: "
-                    f"{item.get('description','unknown')}"
-                )
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Fixed Issues")
-        patch_log_map = {entry.get("id", ""): entry for entry in patch_log}
-        if fixed:
-            for item in fixed:
-                summary_lines.append(
-                    f"- {item['id']} {item['severity']} "
-                    f"{item['file']}:{item['line']} {item.get('function','')}: "
-                    f"{item['description']}"
-                )
-                entry = patch_log_map.get(item["id"], {})
-                if entry.get("verification"):
-                    summary_lines.append(f"  - Verification: {entry['verification']}")
-                if entry.get("diff_summary"):
-                    summary_lines.append("```diff")
-                    summary_lines.append(entry["diff_summary"])
-                    summary_lines.append("```")
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Failed Issues")
-        if failed:
-            for issue_id in failed:
-                item = issue_details.get(issue_id, {})
-                loc = item.get("location") or {}
-                reason = issue_status.get(issue_id, {}).get("reason", "")
-                summary_lines.append(
-                    f"- {issue_id} {item.get('severity','')} "
-                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
-                )
-                if reason:
-                    summary_lines.append(f"  - Last error: {reason}")
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Skipped Issues")
-        if skipped:
-            for issue_id in skipped:
-                item = issue_details.get(issue_id, {})
-                loc = item.get("location") or {}
-                reason = issue_status.get(issue_id, {}).get("reason", "")
-                summary_lines.append(
-                    f"- {issue_id} {item.get('severity','')} "
-                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
-                )
-                if reason:
-                    summary_lines.append(f"  - Reason: {reason}")
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Remaining Issues")
-        if remaining_count:
-            for issue_id, meta in issue_status.items():
-                if meta["status"] in {"FIXED", "SKIPPED"}:
-                    continue
-                item = issue_details.get(issue_id, {})
-                loc = item.get("location") or {}
-                summary_lines.append(
-                    f"- {issue_id} {item.get('severity','')} "
-                    f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
-                )
-        else:
-            summary_lines.append("- None")
-        summary_lines.append("")
-        summary_lines.append("## Patch Log")
-        if patch_log:
-            for entry in patch_log:
-                summary_lines.append(
-                    f"- {entry.get('id','')} {entry['description']} "
-                    f"(attempts: {entry['attempts']})"
-                )
-                if entry.get("verification"):
-                    summary_lines.append(f"  - Verification: {entry['verification']}")
-                if entry["diff_summary"]:
-                    summary_lines.append("```diff")
-                    summary_lines.append(entry["diff_summary"])
-                    summary_lines.append("```")
-        else:
-            summary_lines.append("- None")
-        with open("bug_report.md", "w", encoding="utf-8") as f:
-            f.write("\n".join(summary_lines))
-
-        issues_final = {
-            "found": found_total,
-            "fixed": fixed_count,
-            "failed": len(failed),
-            "skipped": len(skipped),
-            "remaining_actionable": remaining_count,
-            "fixed_issues": fixed,
-            "remaining_issues": remaining,
-            "failed_issues": failed,
-            "skipped_issues": skipped,
-            "patch_log": patch_log,
-        }
-        with open("issues_final.json", "w", encoding="utf-8") as f:
-            json.dump(issues_final, f, indent=2)
-
-        _print_consolidated_issues_console(issue_details, issue_status)
-        if demo_mode:
-            print(
-                f"[bold yellow]Fixed: {fixed_count}, Remaining: {remaining_count}[/bold yellow]"
-            )
+        _run_fix_passes(issue_id=issue_id)
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
 
@@ -684,6 +420,319 @@ def _print_consolidated_issues_console(issue_details: dict, issue_status: dict) 
                 f"  - {issue.get('severity','')} {loc.get('file','')}:{line} "
                 f"{func} {title} [{status_text}]"
             )
+
+
+def _run_fix_passes(issue_id: int | None = None) -> None:
+    from codereview.agent import ReActAgent
+    from codereview.models import BugIssue
+    from codereview.issue_updater import update_report_for_file
+    from codereview.indexer import CodebaseIndexer
+    from codereview.path_utils import resolve_repo_path
+
+    fix_everything = os.getenv("FIX_EVERYTHING", "1") == "1"
+    if fix_everything and issue_id not in (None, 0):
+        print("[yellow]Fix-all mode enabled; skipping per-issue invocation.[/yellow]")
+        return
+
+    max_passes = int(os.getenv("MAX_FIX_PASSES", "5"))
+    agent = ReActAgent()
+
+    fixed = []
+    patch_log = []
+    remaining = []
+    found_total = 0
+    issue_status = {}
+    issue_details = {}
+    before_issues = []
+
+    initial_report = None
+    try:
+        with open("bug_report.json", "r", encoding="utf-8") as f:
+            initial_report = json.load(f)
+    except FileNotFoundError:
+        initial_report = None
+
+    for pass_idx in range(1, max_passes + 1):
+        try:
+            with open("bug_report_meta.json", "r", encoding="utf-8") as f:
+                meta = json.load(f)
+        except FileNotFoundError:
+            meta = {}
+
+        agent.context_cache = {
+            "code_context": meta.get("code_context", ""),
+            "docs_context": meta.get("docs_context", ""),
+        }
+        demo_mode = meta.get("demo", False)
+
+        if pass_idx == 1 and initial_report:
+            report_data = initial_report
+        else:
+            analyze(
+                staged=False,
+                unstaged=False,
+                last_commit=False,
+                path=meta.get("path"),
+                query=meta.get("query"),
+                use_rag=meta.get("use_rag", True),
+                use_docs_rag=meta.get("use_docs_rag", True),
+                rag_mode=meta.get("rag_mode", "dual"),
+                changed_only=meta.get("changed_only", False),
+                base_ref=meta.get("base_ref", "HEAD~1"),
+                demo=meta.get("demo", False),
+                auto_fix=False,
+            )
+            with open("bug_report.json", "r", encoding="utf-8") as f:
+                report_data = json.load(f)
+
+        issues = report_data.get("consolidated_issues", [])
+        if pass_idx == 1:
+            found_total = len(issues)
+            before_issues = list(issues)
+            if demo_mode:
+                print(f"[bold yellow]Issues found: {found_total}[/bold yellow]")
+        if not issues:
+            remaining = []
+            break
+
+        severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
+        issues_sorted = sorted(
+            issues,
+            key=lambda item: (
+                severity_order.get(str(item.get("severity", "")).lower(), 9),
+                (item.get("location") or {}).get("file", ""),
+            ),
+        )
+
+        diff_text = meta.get("diff_text")
+        for issue_data in issues_sorted:
+            issue_id_value = issue_data.get("id")
+            if issue_id_value:
+                issue_details[issue_id_value] = issue_data
+            if issue_id_value and issue_status.get(issue_id_value, {}).get("status") == "FIXED":
+                continue
+            if meta.get("changed_ranges"):
+                file_path = issue_data.get("location", {}).get("file")
+                if file_path:
+                    ranges = meta.get("changed_ranges", {}).get(file_path, [])
+                    issue_data["changed_ranges"] = ranges
+            issue = BugIssue(**issue_data)
+            success = agent.solve_issue(issue, diff_text=diff_text)
+            if success and issue.location and issue.location.file:
+                file_path = issue.location.file
+                update_report_for_file("bug_report.json", file_path)
+                try:
+                    CodebaseIndexer().reindex_file(resolve_repo_path(file_path))
+                except Exception as exc:
+                    print(
+                        f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]"
+                    )
+
+            status = agent.last_fix_status or ("FIXED" if success else "FAILED")
+            reason = agent.last_fix_reason
+            if issue.id:
+                issue_status[issue.id] = {"status": status, "reason": reason}
+            if status == "FIXED":
+                fixed.append(
+                    {
+                        "id": issue.id or "",
+                        "severity": issue.severity,
+                        "file": (issue.location.file if issue.location else ""),
+                        "line": (issue.location.line if issue.location else ""),
+                        "function": (issue.location.function if issue.location else ""),
+                        "description": issue.description,
+                    }
+                )
+                patch_log.append(
+                    {
+                        "id": issue.id or "",
+                        "description": issue.description,
+                        "attempts": agent.last_fix_attempts,
+                        "verification": agent.last_verification_output,
+                        "diff_summary": agent.last_fix_summary,
+                    }
+                )
+            elif status == "SKIPPED":
+                patch_log.append(
+                    {
+                        "id": issue.id or "",
+                        "description": issue.description,
+                        "attempts": agent.last_fix_attempts,
+                        "verification": agent.last_verification_output,
+                        "diff_summary": agent.last_fix_summary,
+                    }
+                )
+            else:
+                remaining = issues
+                break
+        else:
+            remaining = []
+
+    if not remaining:
+        try:
+            with open("bug_report.json", "r", encoding="utf-8") as f:
+                report_data = json.load(f)
+            remaining = report_data.get("consolidated_issues", [])
+        except FileNotFoundError:
+            remaining = []
+
+    fixed_count = len(fixed)
+    failed = [iid for iid, meta in issue_status.items() if meta["status"] == "FAILED"]
+    skipped = [iid for iid, meta in issue_status.items() if meta["status"] == "SKIPPED"]
+    remaining_count = len(
+        [iid for iid, meta in issue_status.items() if meta["status"] not in {"FIXED", "SKIPPED"}]
+    )
+    summary_lines = [
+        "# Fix Summary",
+        "",
+        "| total_found | fixed | failed | skipped | remaining_actionable |",
+        "| --- | --- | --- | --- | --- |",
+        f"| {found_total} | {fixed_count} | {len(failed)} | {len(skipped)} | {remaining_count} |",
+        "",
+        "## Before Fix",
+    ]
+    for item in before_issues:
+        loc = item.get("location") or {}
+        summary_lines.append(
+            f"- {item.get('severity','')} "
+            f"{loc.get('file','')}:{loc.get('line','')}: "
+            f"{item.get('description','unknown')}"
+        )
+    if not before_issues:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Applied Patches")
+    if patch_log:
+        for entry in patch_log:
+            summary_lines.append(
+                f"- {entry.get('id','')} {entry['description']} "
+                f"(attempts: {entry['attempts']})"
+            )
+            if entry.get("verification"):
+                summary_lines.append(f"  - Verification: {entry['verification']}")
+            if entry["diff_summary"]:
+                summary_lines.append("```diff")
+                summary_lines.append(entry["diff_summary"])
+                summary_lines.append("```")
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## After Fix")
+    if remaining_count:
+        for issue_id_value, meta in issue_status.items():
+            if meta["status"] in {"FIXED", "SKIPPED"}:
+                continue
+            item = issue_details.get(issue_id_value, {})
+            loc = item.get("location") or {}
+            summary_lines.append(
+                f"- {issue_id_value} {item.get('severity','')} "
+                f"{loc.get('file','')}:{loc.get('line','')}: "
+                f"{item.get('description','unknown')}"
+            )
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Fixed Issues")
+    patch_log_map = {entry.get("id", ""): entry for entry in patch_log}
+    if fixed:
+        for item in fixed:
+            summary_lines.append(
+                f"- {item['id']} {item['severity']} "
+                f"{item['file']}:{item['line']} {item.get('function','')}: "
+                f"{item['description']}"
+            )
+            entry = patch_log_map.get(item["id"], {})
+            if entry.get("verification"):
+                summary_lines.append(f"  - Verification: {entry['verification']}")
+            if entry.get("diff_summary"):
+                summary_lines.append("```diff")
+                summary_lines.append(entry["diff_summary"])
+                summary_lines.append("```")
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Failed Issues")
+    if failed:
+        for issue_id_value in failed:
+            item = issue_details.get(issue_id_value, {})
+            loc = item.get("location") or {}
+            reason = issue_status.get(issue_id_value, {}).get("reason", "")
+            summary_lines.append(
+                f"- {issue_id_value} {item.get('severity','')} "
+                f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+            )
+            if reason:
+                summary_lines.append(f"  - Last error: {reason}")
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Skipped Issues")
+    if skipped:
+        for issue_id_value in skipped:
+            item = issue_details.get(issue_id_value, {})
+            loc = item.get("location") or {}
+            reason = issue_status.get(issue_id_value, {}).get("reason", "")
+            summary_lines.append(
+                f"- {issue_id_value} {item.get('severity','')} "
+                f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+            )
+            if reason:
+                summary_lines.append(f"  - Reason: {reason}")
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Remaining Issues")
+    if remaining_count:
+        for issue_id_value, meta in issue_status.items():
+            if meta["status"] in {"FIXED", "SKIPPED"}:
+                continue
+            item = issue_details.get(issue_id_value, {})
+            loc = item.get("location") or {}
+            summary_lines.append(
+                f"- {issue_id_value} {item.get('severity','')} "
+                f"{loc.get('file','')}:{loc.get('line','')}: {item.get('description','unknown')}"
+            )
+    else:
+        summary_lines.append("- None")
+    summary_lines.append("")
+    summary_lines.append("## Patch Log")
+    if patch_log:
+        for entry in patch_log:
+            summary_lines.append(
+                f"- {entry.get('id','')} {entry['description']} "
+                f"(attempts: {entry['attempts']})"
+            )
+            if entry.get("verification"):
+                summary_lines.append(f"  - Verification: {entry['verification']}")
+            if entry["diff_summary"]:
+                summary_lines.append("```diff")
+                summary_lines.append(entry["diff_summary"])
+                summary_lines.append("```")
+    else:
+        summary_lines.append("- None")
+    with open("bug_report.md", "w", encoding="utf-8") as f:
+        f.write("\n".join(summary_lines))
+
+    issues_final = {
+        "found": found_total,
+        "fixed": fixed_count,
+        "failed": len(failed),
+        "skipped": len(skipped),
+        "remaining_actionable": remaining_count,
+        "fixed_issues": fixed,
+        "remaining_issues": remaining,
+        "failed_issues": failed,
+        "skipped_issues": skipped,
+        "patch_log": patch_log,
+    }
+    with open("issues_final.json", "w", encoding="utf-8") as f:
+        json.dump(issues_final, f, indent=2)
+
+    _print_consolidated_issues_console(issue_details, issue_status)
+    if demo_mode:
+        print(
+            f"[bold yellow]Fixed: {fixed_count}, Remaining: {remaining_count}[/bold yellow]"
+        )
 
 @app.command()
 def evaluate(

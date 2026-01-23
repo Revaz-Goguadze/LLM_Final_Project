@@ -97,6 +97,12 @@ class FixContextBuilder:
             return ""
 
         try:
+            line = int(line)
+            context_radius = int(context_radius)
+        except Exception:
+            return ""
+
+        try:
             with open(abs_path, "r", encoding="utf-8") as f:
                 lines = f.readlines()
         except (OSError, UnicodeDecodeError):

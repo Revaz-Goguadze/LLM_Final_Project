@@ -100,6 +100,11 @@ class ReActAgent:
         lines = self._read_file_lines(file_path)
         if not lines:
             return ""
+        try:
+            line = int(line)
+            context_lines = int(context_lines)
+        except Exception:
+            return ""
         start = max(0, line - context_lines)
         end = min(len(lines), line + context_lines)
         numbered = [

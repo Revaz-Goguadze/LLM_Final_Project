@@ -145,6 +145,11 @@ class HybridRetriever:
         return scores
 
     def search(self, query: str, n_results: int = 5):
+        try:
+            n_results = int(n_results)
+        except Exception:
+            n_results = 5
+        n_results = max(1, n_results)
         # Get ranked results from BM25 and semantic search
         semantic = self._semantic_search(query, SEMANTIC_TOP_K)
         bm25 = self.bm25.search(query, BM25_TOP_K)
