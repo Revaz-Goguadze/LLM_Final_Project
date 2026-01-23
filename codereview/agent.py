@@ -76,6 +76,9 @@ class ReActAgent:
         self.fix_verifier = FixVerifier(verify_command=VERIFY_COMMAND)
         self.fix_tracker = FixTracker()
         self.error_classifier = ErrorClassifier()
+        self.last_fix_summary = ""
+        self.last_fix_attempts = 0
+        self.last_verification_output = ""
 
     def _read_file_lines(self, file_path: str) -> list:
         if not file_path:

@@ -290,17 +290,20 @@ def fix(issue_id: int):
     from codereview.issue_updater import update_report_for_file
     from codereview.indexer import CodebaseIndexer
     from codereview.path_utils import resolve_repo_path
-    
+
     try:
         with open("bug_report.json", "r") as f:
             report_data = json.load(f)
-        
+
         issues = report_data.get("consolidated_issues", [])
-        if not issues or issue_id >= len(issues):
+        fix_everything = os.getenv("FIX_EVERYTHING", "1") == "1"
+        if not issues:
+            print("[yellow]No issues to fix.[/yellow]")
+            return
+        if not fix_everything and issue_id >= len(issues):
             print(f"[red]Issue ID {issue_id} not found.[/red]")
             return
-        
-        issue = BugIssue(**issues[issue_id])
+
         agent = ReActAgent()
         diff_text = None
         try:
@@ -309,14 +312,79 @@ def fix(issue_id: int):
                 diff_text = meta.get("diff_text")
         except FileNotFoundError:
             diff_text = None
-        success = agent.solve_issue(issue, diff_text=diff_text)
-        if success and issue.location and issue.location.file:
-            file_path = issue.location.file
-            update_report_for_file("bug_report.json", file_path)
-            try:
-                CodebaseIndexer().index_file(resolve_repo_path(file_path))
-            except Exception as exc:
-                print(f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]")
+
+        fixed = []
+        patch_log = []
+
+        target_issues = issues if fix_everything else [issues[issue_id]]
+        remaining = list(issues)
+
+        for issue_data in list(target_issues):
+            issue = BugIssue(**issue_data)
+            success = agent.solve_issue(issue, diff_text=diff_text)
+            if success and issue.location and issue.location.file:
+                file_path = issue.location.file
+                update_report_for_file("bug_report.json", file_path)
+                try:
+                    CodebaseIndexer().index_file(resolve_repo_path(file_path))
+                except Exception as exc:
+                    print(f"[yellow]Warning: Could not reindex {file_path}: {exc}[/yellow]")
+
+            if success:
+                fixed.append(issue.description)
+                if issue_data in remaining:
+                    remaining.remove(issue_data)
+                patch_log.append(
+                    {
+                        "description": issue.description,
+                        "attempts": agent.last_fix_attempts,
+                        "verification": agent.last_verification_output,
+                        "diff_summary": agent.last_fix_summary,
+                    }
+                )
+
+        report_data["consolidated_issues"] = remaining
+        with open("bug_report.json", "w", encoding="utf-8") as f:
+            json.dump(report_data, f, indent=2)
+
+        fixed_count = len(fixed)
+        remaining_count = len(remaining)
+        summary_lines = [
+            "# Fix Summary",
+            "",
+            f"- Found: {len(issues)}",
+            f"- Fixed: {fixed_count}",
+            f"- Remaining: {remaining_count}",
+            "",
+            "## Fixed Issues",
+        ]
+        if fixed:
+            summary_lines.extend([f"- {desc}" for desc in fixed])
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## Remaining Issues")
+        if remaining:
+            summary_lines.extend(
+                [f"- {item.get('description', 'unknown')}" for item in remaining]
+            )
+        else:
+            summary_lines.append("- None")
+        summary_lines.append("")
+        summary_lines.append("## Patch Log")
+        if patch_log:
+            for entry in patch_log:
+                summary_lines.append(
+                    f"- {entry['description']} (attempts: {entry['attempts']})"
+                )
+                if entry["diff_summary"]:
+                    summary_lines.append("```diff")
+                    summary_lines.append(entry["diff_summary"])
+                    summary_lines.append("```")
+        else:
+            summary_lines.append("- None")
+        with open("bug_report.md", "w", encoding="utf-8") as f:
+            f.write("\n".join(summary_lines))
     except FileNotFoundError:
         print("[red]No bug report found. Run 'analyze' first.[/red]")
 

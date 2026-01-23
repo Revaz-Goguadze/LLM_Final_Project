@@ -5,6 +5,7 @@ from .agent_state import AgentState
 from .models import BugIssue, FixFormat
 from .config import MAX_FIX_RETRIES
 from .path_utils import normalize_repo_path
+from .issue_updater import _find_snippet_line
 
 if TYPE_CHECKING:
     from .agent import ReActAgent
@@ -123,6 +124,34 @@ class FixLoopRunner:
         issue.chunk_end_line = end
         issue.chunk_type = source
         return start, end, source
+
+    def _relocate_issue_before_fix(self, issue: BugIssue) -> None:
+        lines = self.agent._read_file_lines(issue.location.file)
+        if not lines:
+            return
+        content = "".join(lines)
+        candidates = [
+            issue.evidence_snippet,
+            issue.evidence,
+            issue.line_text,
+        ]
+        candidates = [c for c in candidates if isinstance(c, str) and c.strip()]
+        line_no = None
+        for candidate in candidates:
+            line_no = _find_snippet_line(content, candidate)
+            if line_no:
+                break
+        if line_no:
+            issue.location.line = line_no
+            issue.start_line = line_no
+            issue.end_line = line_no
+            issue.line_text = lines[line_no - 1].rstrip("\n")
+            return
+        if issue.location.line:
+            start_line = max(1, issue.location.line - 30)
+            end_line = min(len(lines), issue.location.line + 30)
+            issue.start_line = start_line
+            issue.end_line = end_line
 
     @staticmethod
     def _summarize_diff(before: str, after: str) -> str:
@@ -306,8 +335,8 @@ class FixLoopRunner:
         last_fix: Optional[str] = None
         error_history: List[str] = []
         issue_key = agent._issue_key(issue)
-        preferred_format = agent.fix_strategy_selector.recommend_format(issue, diff_text)
-        enforce_format = False
+        preferred_format = FixFormat.PATCH
+        enforce_format = True
         desc_lower = (issue.description or "").lower()
         force_patch = False
         if issue.chunk_type == "class" and any(
@@ -319,9 +348,6 @@ class FixLoopRunner:
 
         if force_patch:
             preferred_format = FixFormat.PATCH
-            enforce_format = True
-        elif issue.start_line == issue.end_line and issue.start_line:
-            preferred_format = FixFormat.REPLACE
             enforce_format = True
 
         last_verification_output: Optional[str] = None
@@ -337,6 +363,7 @@ class FixLoopRunner:
             state = AgentState.BUILD_CONTEXT
             print(f"\n[Agent] Attempt {attempt}/{MAX_FIX_RETRIES}")
             print("[Agent] Generating fix...")
+            self._relocate_issue_before_fix(issue)
             window_info = self._ensure_edit_window(issue, refresh=True)
             if window_info:
                 start, end, source = window_info
@@ -475,6 +502,8 @@ class FixLoopRunner:
                 continue
 
             payload = agent._parse_fix_payload(raw_fix)
+            if not payload and "diff --git" in raw_fix:
+                payload = {"format": "patch", "patch": raw_fix}
             state = AgentState.VALIDATE_FIX
             is_valid, reason, normalized = agent._validate_fix_payload(
                 issue,
@@ -522,7 +551,7 @@ class FixLoopRunner:
                     run_dir, f"attempt_{attempt}_repair_raw_llm.txt", raw_fix
                 )
                 if raw_fix:
-                    payload = agent._parse_fix_payload(raw_fix)
+                    payload = {"format": "patch", "patch": raw_fix}
                     is_valid, reason, normalized = agent._validate_fix_payload(
                         issue,
                         payload,
@@ -600,8 +629,8 @@ class FixLoopRunner:
                 )
                 return False
 
-            start_line = normalized.get("start_line") if not is_patch else None
-            end_line = normalized.get("end_line") if not is_patch else None
+            start_line = None
+            end_line = None
 
             if not is_patch and start_line:
                 existing = agent._read_line_range(
@@ -678,6 +707,9 @@ class FixLoopRunner:
                 print("[Agent] Fix applied and verified successfully!")
                 state = AgentState.SUCCESS
                 agent._write_run_file(run_dir, "final_state.txt", state.value)
+                agent.last_fix_summary = self._summarize_diff(pre_content, post_content)
+                agent.last_fix_attempts = attempt
+                agent.last_verification_output = output
                 agent.fix_tracker.record_attempt(
                     issue_id=issue_key,
                     mode=preferred_format.value,
