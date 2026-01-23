@@ -23,6 +23,7 @@ from .config import (
     ENABLE_DEDUPLICATION,
     DEDUPLICATION_LINE_THRESHOLD,
     ENABLE_PARALLEL_GRADING,
+    OPENAI_BASE_URL,
 )
 from .llm_utils import RateLimiter, backoff_sleep
 from .gemini_client import GeminiClient
@@ -92,6 +93,7 @@ class MultiLLMGrader:
                 raise ValueError("OPENAI_API_KEY is required for grading.")
             self.client = OpenAI(
                 api_key=OPENAI_API_KEY,
+                base_url=OPENAI_BASE_URL or None,
                 timeout=OPENAI_TIMEOUT,
                 max_retries=2,
             )
@@ -115,7 +117,7 @@ class MultiLLMGrader:
 
         def _to_dict(issue: Any) -> Dict[str, Any]:
             """Convert BugIssue to dict if needed."""
-            if hasattr(issue, 'model_dump'):
+            if hasattr(issue, "model_dump"):
                 return issue.model_dump()
             elif isinstance(issue, dict):
                 return issue
@@ -141,14 +143,18 @@ class MultiLLMGrader:
             # Find if this issue belongs to an existing group
             matched_group = None
             for group in groups:
-                for (_, g_dict) in group:
+                for _, g_dict in group:
                     g_file = g_dict.get("location", {}).get("file", "")
                     g_line = g_dict.get("location", {}).get("line")
                     g_type = g_dict.get("type", "unknown")
 
                     # Same file and type, check line distance
-                    if (g_file == file_path and g_type == issue_type and
-                        line is not None and g_line is not None):
+                    if (
+                        g_file == file_path
+                        and g_type == issue_type
+                        and line is not None
+                        and g_line is not None
+                    ):
                         if abs(line - g_line) <= threshold:
                             matched_group = group
                             break
@@ -192,6 +198,12 @@ CRITICAL RULES:
 5. Only report issues with confidence >= 0.85
 6. Focus on the CHANGED code (lines with + prefix in diffs), not surrounding context
 
+LINE RANGE RULES:
+- "line" is the PRIMARY line where the issue occurs
+- "start_line" and "end_line" define the FULL range of code that must be replaced to fix the issue
+- If a fix requires removing multiple lines (e.g., a variable definition AND its usage), include ALL affected lines in the range
+- Example: If line 25 defines `query = f"..."` and line 26 uses `cursor.execute(query)`, set start_line=25, end_line=26
+
 Each issue must have concrete evidence - a specific line that demonstrates the bug."""
 
         prompts = {
@@ -207,7 +219,7 @@ Each issue must have concrete evidence - a specific line that demonstrates the b
         return f"""{system_prompt}
 
 Return your assessment strictly as a JSON object matching this schema:
-{{ "issues": [ {{ "severity": "critical/high/medium/low", "type": "security/logic/performance/style", "location": {{"file": "string", "line": int, "function": "string"}}, "description": "string", "evidence": "string", "suggested_fix": "string", "confidence": float }} ], "best_practices_violations": [ {{ "rule": "string", "description": "string", "count": int }} ], "overall_score": float (0-10, where 10 is perfect code), "summary": "string" }}
+{{ "issues": [ {{ "severity": "critical/high/medium/low", "type": "security/logic/performance/style", "location": {{"file": "string", "line": int, "function": "string"}}, "start_line": int, "end_line": int, "description": "string", "evidence": "string", "suggested_fix": "string", "confidence": float }} ], "best_practices_violations": [ {{ "rule": "string", "description": "string", "count": int }} ], "overall_score": float (0-10, where 10 is perfect code), "summary": "string" }}
 
 REMEMBER: If the code is clean and well-written, return {{"issues": [], "best_practices_violations": [], "overall_score": 9.0, "summary": "Code is well-written with no significant issues."}}
 
@@ -446,9 +458,15 @@ Code to analyze:
         results = {}
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = {
-                executor.submit(self.grade_with_model, "security", security_model, code): "security",
-                executor.submit(self.grade_with_model, "logic", logic_model, code): "logic",
-                executor.submit(self.grade_with_model, "performance", perf_model, code): "performance",
+                executor.submit(
+                    self.grade_with_model, "security", security_model, code
+                ): "security",
+                executor.submit(
+                    self.grade_with_model, "logic", logic_model, code
+                ): "logic",
+                executor.submit(
+                    self.grade_with_model, "performance", perf_model, code
+                ): "performance",
             }
             for future in as_completed(futures):
                 role = futures[future]

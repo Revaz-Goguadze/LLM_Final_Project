@@ -5,7 +5,7 @@ from typing import List
 
 from openai import OpenAI
 
-from .config import EMBEDDING_MODE, OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL, OPENAI_TIMEOUT
+from .config import EMBEDDING_MODE, OPENAI_API_KEY, OPENAI_EMBEDDING_MODEL, OPENAI_TIMEOUT, OPENAI_BASE_URL
 
 
 class LocalHashEmbeddingFunction:
@@ -34,7 +34,7 @@ class OpenAIEmbeddingFunction:
     def __init__(self, model: str = OPENAI_EMBEDDING_MODEL):
         if not OPENAI_API_KEY:
             raise ValueError("OPENAI_API_KEY is required for OpenAI embeddings.")
-        self.client = OpenAI(api_key=OPENAI_API_KEY, timeout=OPENAI_TIMEOUT, max_retries=2)
+        self.client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL or None, timeout=OPENAI_TIMEOUT, max_retries=2)
         self.model = model
 
     def __call__(self, input: List[str]) -> List[List[float]]:
